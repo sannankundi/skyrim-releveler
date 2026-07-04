@@ -609,6 +609,10 @@ namespace SkyrimReleveler
 
             Console.WriteLine("Data files loaded. Starting patch...");
 
+            // Build a single immutable link cache used for the entire patch — same as TUS's Patcher.LinkCache.
+            // Much faster than using state.LinkCache which rebuilds on each access in newer Mutagen.
+            var linkCache = state.LoadOrder.PriorityOrder.ToImmutableLinkCache();
+
             // --- Helpers ---
             static List<string> SplitTokens(string s)
             {
@@ -665,7 +669,7 @@ namespace SkyrimReleveler
             void GetRaceModifier(INpcGetter npc, out short add, out float mult)
             {
                 add = 0; mult = 1f;
-                if (!npc.Race.TryResolve(state.LinkCache, out var race) || race.EditorID is null) return;
+                if (!npc.Race.TryResolve(linkCache, out var race) || race.EditorID is null) return;
                 foreach (var entry in raceModifiers.Data)
                     if (entry.Keys.Any(k => race.EditorID.Contains(k, StringComparison.OrdinalIgnoreCase)) &&
                         !entry.ForbiddenKeys.Any(k => race.EditorID.Contains(k, StringComparison.OrdinalIgnoreCase)))
@@ -693,7 +697,7 @@ namespace SkyrimReleveler
                 string? firstMatchedKey = null;
                 foreach (var rank in getter.Factions)
                 {
-                    if (!rank.Faction.TryResolve(state.LinkCache, out var fac) || fac.EditorID is null) continue;
+                    if (!rank.Faction.TryResolve(linkCache, out var fac) || fac.EditorID is null) continue;
                     var matchedKey = orderedRules.FirstOrDefault(r =>
                         fac.EditorID.Contains(r.Faction, StringComparison.OrdinalIgnoreCase)).Faction;
                     if (matchedKey is null) continue;
@@ -724,8 +728,7 @@ namespace SkyrimReleveler
             foreach (var (formKey, cached) in npcFactionCache)
             {
                 if (!flatFactions.Contains(cached.Faction)) continue;
-                // Resolve EditorID from the winning override via FormKey
-                if (!state.LinkCache.TryResolve<INpcGetter>(formKey, out var npcGetter) || npcGetter.EditorID is null) continue;
+                if (!linkCache.TryResolve<INpcGetter>(formKey, out var npcGetter) || npcGetter.EditorID is null) continue;
                 if (!flatFactionStems.TryGetValue(cached.Faction, out var stems))
                     flatFactionStems[cached.Faction] = stems = new List<string>();
                 string stem = GetStem(npcGetter.EditorID);
@@ -741,6 +744,7 @@ namespace SkyrimReleveler
             }
 
             // --- Pass 2: relevel + redistribute skills/perks ---
+            // Uses DeepCopy+Set pattern (same as TUS) — avoids GetOrAddAsOverride overhead.
             int followersScaled = 0, npcsProcessed = 0;
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
@@ -750,15 +754,19 @@ namespace SkyrimReleveler
                     getter.HasKeyword(Skyrim.Keyword.PlayerKeyword)) continue;
                 if (IsExcluded(editorId)) continue;
 
+                bool wasChanged = false;
+                Npc npcCopy = getter.DeepCopy();
+
                 // Followers — unlimited PC-level scaling, skip releveling
                 if (IsFollower(getter))
                 {
-                    var fnpc = state.PatchMod.Npcs.GetOrAddAsOverride(getter);
-                    fnpc.Configuration.Level = new PcLevelMult { LevelMult = 1f };
-                    fnpc.Configuration.CalcMinLevel = Math.Max(fnpc.Configuration.CalcMinLevel, (short)1);
-                    fnpc.Configuration.CalcMaxLevel = short.MaxValue;
+                    npcCopy.Configuration.Level = new PcLevelMult { LevelMult = 1f };
+                    npcCopy.Configuration.CalcMinLevel = Math.Max(npcCopy.Configuration.CalcMinLevel, (short)1);
+                    npcCopy.Configuration.CalcMaxLevel = short.MaxValue;
                     ++followersScaled;
+                    wasChanged = true;
                     if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: follower -> unlimited scaling");
+                    state.PatchMod.Npcs.Set(npcCopy);
                     continue;
                 }
 
@@ -770,18 +778,16 @@ namespace SkyrimReleveler
                     short fixedLevel = (short)Math.Clamp(
                         Math.Round(namedLevel.Value * rMult) + rAdd + Settings.GlobalOffset, 1, short.MaxValue);
                     if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
-                    foreach (var root in ResolveStatsRoots(getter, state.LinkCache, new HashSet<FormKey>()))
-                    {
-                        var npc = state.PatchMod.Npcs.GetOrAddAsOverride(root);
-                        ApplyLevel(npc, fixedLevel);
-                        RebalanceClassValues(npc, state, state.LinkCache);
-                        RelevelNPCSkills(npc, state.LinkCache);
-                        DistributeNPCPerks(npc, state.LinkCache, GetVanillaCache(), excludedPerks);
-                    }
+                    ApplyLevel(npcCopy, fixedLevel);
+                    RebalanceClassValues(npcCopy, state, linkCache);
+                    RelevelNPCSkills(npcCopy, linkCache);
+                    wasChanged |= DistributeNPCPerks(npcCopy, linkCache, GetVanillaCache(), excludedPerks);
+                    wasChanged = true;
+                    state.PatchMod.Npcs.Set(npcCopy);
                     continue;
                 }
 
-                // Find matching faction rule — use cache from discovery pass, no faction re-resolution
+                // Find matching faction rule — use cache from discovery pass
                 if (!npcFactionCache.TryGetValue(getter.FormKey, out var cached))
                     continue;
 
@@ -823,25 +829,20 @@ namespace SkyrimReleveler
                         Console.WriteLine($"  {editorId}: eff {effectiveLevel} in [{srcMin},{srcMax}] -> [{targetMin},{targetMax}] -> {baseLevel}");
                 }
 
-                // Apply race modifier
+                // Apply race modifier and boss bonus
                 GetRaceModifier(getter, out var add, out var mult);
                 baseLevel = Math.Round(baseLevel * (decimal)mult) + add;
-
-                // Apply boss bonus
                 float bonusPct = GetBonusPercent(editorId);
                 if (bonusPct > 0f) baseLevel = Math.Round(baseLevel * (decimal)(1f + bonusPct / 100f));
 
                 short newLevel = (short)Math.Clamp(baseLevel, 1, short.MaxValue);
                 if (newLevel > 100) highPoweredNpcs.Add(editorId);
 
-                foreach (var root in ResolveStatsRoots(getter, state.LinkCache, new HashSet<FormKey>()))
-                {
-                    var npc = state.PatchMod.Npcs.GetOrAddAsOverride(root);
-                    ApplyLevel(npc, newLevel);
-                    RebalanceClassValues(npc, state, state.LinkCache);
-                    RelevelNPCSkills(npc, state.LinkCache);
-                    DistributeNPCPerks(npc, state.LinkCache, GetVanillaCache(), excludedPerks);
-                }
+                ApplyLevel(npcCopy, newLevel);
+                RebalanceClassValues(npcCopy, state, linkCache);
+                RelevelNPCSkills(npcCopy, linkCache);
+                DistributeNPCPerks(npcCopy, linkCache, GetVanillaCache(), excludedPerks);
+                state.PatchMod.Npcs.Set(npcCopy);
 
                 ++npcsProcessed;
                 if (npcsProcessed % 500 == 0) Console.WriteLine($"Processed {npcsProcessed} NPCs...");
