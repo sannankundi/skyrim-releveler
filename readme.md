@@ -37,7 +37,7 @@ NPCs with EditorIDs matching configured keywords (Boss, Chief, Warlord, etc.) re
 
 1. Add the patcher to Synthesis via the GitHub repository URL or local path
 2. Run it — data files are generated automatically on first run
-3. Place `skyrim_releveled.esp` anywhere in your load order after any mods that add or modify NPC factions
+3. Place `synthesis.esp` anywhere in your load order after any mods that add or modify NPC factions. I'd prefer it be last in your load order as it does nothing you might not want it to do.
 
 No other unleveling patchers needed before it. SkyrimReleveler reads original NPC levels directly from your load order.
 
