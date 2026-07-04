@@ -744,8 +744,10 @@ namespace SkyrimReleveler
             }
 
             // --- Pass 2: relevel + redistribute skills/perks ---
-            // Uses DeepCopy+Set pattern (same as TUS) — avoids GetOrAddAsOverride overhead.
-            int followersScaled = 0, npcsProcessed = 0;
+            // Level assignment: only faction-matched, named, and follower NPCs.
+            // Class rebuild + skill redistribution + perk distribution: ALL NPCs (same as TUS).
+            // Uses DeepCopy+Set pattern — avoids GetOrAddAsOverride overhead.
+            int followersScaled = 0, npcsReleveled = 0, npcsProcessed = 0;
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
                 if (npcsToIgnore.Contains(getter)) continue;
@@ -754,10 +756,11 @@ namespace SkyrimReleveler
                     getter.HasKeyword(Skyrim.Keyword.PlayerKeyword)) continue;
                 if (IsExcluded(editorId)) continue;
 
-                bool wasChanged = false;
                 Npc npcCopy = getter.DeepCopy();
+                bool wasChanged = false;
 
-                // Followers — unlimited PC-level scaling, skip releveling
+                // --- Level assignment (faction/named/follower only) ---
+
                 if (IsFollower(getter))
                 {
                     npcCopy.Configuration.Level = new PcLevelMult { LevelMult = 1f };
@@ -766,90 +769,83 @@ namespace SkyrimReleveler
                     ++followersScaled;
                     wasChanged = true;
                     if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: follower -> unlimited scaling");
-                    state.PatchMod.Npcs.Set(npcCopy);
-                    continue;
                 }
-
-                // Named NPC override
-                int? namedLevel = FindNamedLevel(editorId);
-                if (namedLevel is not null)
+                else if (FindNamedLevel(editorId) is { } namedLevel)
                 {
                     GetRaceModifier(getter, out var rAdd, out var rMult);
                     short fixedLevel = (short)Math.Clamp(
-                        Math.Round(namedLevel.Value * rMult) + rAdd + Settings.GlobalOffset, 1, short.MaxValue);
+                        Math.Round(namedLevel * rMult) + rAdd + Settings.GlobalOffset, 1, short.MaxValue);
                     if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
                     ApplyLevel(npcCopy, fixedLevel);
-                    RebalanceClassValues(npcCopy, state, linkCache);
-                    RelevelNPCSkills(npcCopy, linkCache);
-                    wasChanged |= DistributeNPCPerks(npcCopy, linkCache, GetVanillaCache(), excludedPerks);
                     wasChanged = true;
+                    ++npcsReleveled;
+                }
+                else if (npcFactionCache.TryGetValue(getter.FormKey, out var cached))
+                {
+                    int[]? rule = enemyRules.TryGetValue(cached.Faction, out var r) ? r : null;
+                    if (rule is not null)
+                    {
+                        int effectiveLevel = cached.EffLevel;
+                        int targetMin = rule[0], targetMax = rule[1];
+                        if (effectiveLevel <= targetMax)
+                        {
+                            decimal baseLevel;
+                            string matchedFaction = cached.Faction;
+                            if (flatFactions.Contains(matchedFaction))
+                            {
+                                string stem = GetStem(editorId);
+                                var stems = flatFactionStems.TryGetValue(matchedFaction, out var sl) ? sl : new List<string>();
+                                int count = Math.Max(stems.Count, 1);
+                                int idx = Math.Max(stems.IndexOf(stem), 0);
+                                int bandSize = Math.Max((targetMax - targetMin) / count, 1);
+                                int bandMin = targetMin + idx * bandSize;
+                                int bandMax = idx == count - 1 ? targetMax : bandMin + bandSize - 1;
+                                baseLevel = Rng.Next(bandMin, bandMax + 1) + Settings.GlobalOffset;
+                                if (Settings.PrintDebugOutput)
+                                    Console.WriteLine($"  {editorId} [stem:{stem} {idx+1}/{count}]: flat -> band [{bandMin},{bandMax}] -> {baseLevel}");
+                            }
+                            else
+                            {
+                                (int srcMin, int srcMax) = factionSourceRange[matchedFaction];
+                                int clamped = Math.Clamp(effectiveLevel, srcMin, srcMax);
+                                if (effectiveLevel < srcMin) underleveledNpcs.Add(editorId);
+                                if (effectiveLevel > srcMax) overleveledNpcs.Add(editorId);
+                                baseLevel = MapLevel(clamped, srcMin, srcMax, targetMin, targetMax) + Settings.GlobalOffset;
+                                if (Settings.PrintDebugOutput)
+                                    Console.WriteLine($"  {editorId}: eff {effectiveLevel} in [{srcMin},{srcMax}] -> [{targetMin},{targetMax}] -> {baseLevel}");
+                            }
+
+                            GetRaceModifier(getter, out var add, out var mult);
+                            baseLevel = Math.Round(baseLevel * (decimal)mult) + add;
+                            float bonusPct = GetBonusPercent(editorId);
+                            if (bonusPct > 0f) baseLevel = Math.Round(baseLevel * (decimal)(1f + bonusPct / 100f));
+
+                            short newLevel = (short)Math.Clamp(baseLevel, 1, short.MaxValue);
+                            if (newLevel > 100) highPoweredNpcs.Add(editorId);
+
+                            ApplyLevel(npcCopy, newLevel);
+                            wasChanged = true;
+                            ++npcsReleveled;
+                        }
+                        else if (Settings.PrintDebugOutput)
+                            Console.WriteLine($"  {editorId}: eff {effectiveLevel} > {targetMax}, skipping relevel.");
+                    }
+                }
+
+                // --- Class rebuild + skill redistribution + perk distribution (all NPCs) ---
+                wasChanged |= RebalanceClassValues(npcCopy, state, linkCache);
+                wasChanged |= RelevelNPCSkills(npcCopy, linkCache);
+                wasChanged |= DistributeNPCPerks(npcCopy, linkCache, GetVanillaCache(), excludedPerks);
+
+                if (wasChanged)
                     state.PatchMod.Npcs.Set(npcCopy);
-                    continue;
-                }
-
-                // Find matching faction rule — use cache from discovery pass
-                if (!npcFactionCache.TryGetValue(getter.FormKey, out var cached))
-                    continue;
-
-                int[]? rule = enemyRules.TryGetValue(cached.Faction, out var r) ? r : null;
-                string matchedFaction = cached.Faction;
-                if (rule is null) continue;
-
-                int effectiveLevel = cached.EffLevel;
-                int targetMin = rule[0], targetMax = rule[1];
-                if (effectiveLevel > targetMax)
-                {
-                    if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: eff {effectiveLevel} > {targetMax}, skipping.");
-                    continue;
-                }
-
-                // Compute base target level
-                decimal baseLevel;
-                if (flatFactions.Contains(matchedFaction))
-                {
-                    string stem = GetStem(editorId);
-                    var stems = flatFactionStems.TryGetValue(matchedFaction, out var sl) ? sl : new List<string>();
-                    int count = Math.Max(stems.Count, 1);
-                    int idx = Math.Max(stems.IndexOf(stem), 0);
-                    int bandSize = Math.Max((targetMax - targetMin) / count, 1);
-                    int bandMin = targetMin + idx * bandSize;
-                    int bandMax = idx == count - 1 ? targetMax : bandMin + bandSize - 1;
-                    baseLevel = Rng.Next(bandMin, bandMax + 1) + Settings.GlobalOffset;
-                    if (Settings.PrintDebugOutput)
-                        Console.WriteLine($"  {editorId} [stem:{stem} {idx+1}/{count}]: flat -> band [{bandMin},{bandMax}] -> {baseLevel}");
-                }
-                else
-                {
-                    (int srcMin, int srcMax) = factionSourceRange[matchedFaction];
-                    int clamped = Math.Clamp(effectiveLevel, srcMin, srcMax);
-                    if (effectiveLevel < srcMin) underleveledNpcs.Add(editorId);
-                    if (effectiveLevel > srcMax) overleveledNpcs.Add(editorId);
-                    baseLevel = MapLevel(clamped, srcMin, srcMax, targetMin, targetMax) + Settings.GlobalOffset;
-                    if (Settings.PrintDebugOutput)
-                        Console.WriteLine($"  {editorId}: eff {effectiveLevel} in [{srcMin},{srcMax}] -> [{targetMin},{targetMax}] -> {baseLevel}");
-                }
-
-                // Apply race modifier and boss bonus
-                GetRaceModifier(getter, out var add, out var mult);
-                baseLevel = Math.Round(baseLevel * (decimal)mult) + add;
-                float bonusPct = GetBonusPercent(editorId);
-                if (bonusPct > 0f) baseLevel = Math.Round(baseLevel * (decimal)(1f + bonusPct / 100f));
-
-                short newLevel = (short)Math.Clamp(baseLevel, 1, short.MaxValue);
-                if (newLevel > 100) highPoweredNpcs.Add(editorId);
-
-                ApplyLevel(npcCopy, newLevel);
-                RebalanceClassValues(npcCopy, state, linkCache);
-                RelevelNPCSkills(npcCopy, linkCache);
-                DistributeNPCPerks(npcCopy, linkCache, GetVanillaCache(), excludedPerks);
-                state.PatchMod.Npcs.Set(npcCopy);
 
                 ++npcsProcessed;
-                if (npcsProcessed % 500 == 0) Console.WriteLine($"Processed {npcsProcessed} NPCs...");
+                if (npcsProcessed % 1000 == 0) Console.WriteLine($"Processed {npcsProcessed} NPCs...");
             }
 
             DisableExtraDamagePerks(state);
-            Console.WriteLine($"Done. {npcsProcessed} NPCs releveled, {followersScaled} followers scaled.");
+            Console.WriteLine($"Done. {npcsReleveled} NPCs releveled, {followersScaled} followers scaled, {npcsProcessed} total processed.");
             PrintWarnings();
         }
 
