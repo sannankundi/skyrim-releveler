@@ -9,6 +9,7 @@
     { "Key": "Serana",         "ForbiddenKeys": [] },
     { "Key": "Caesia",         "ForbiddenKeys": [] },
     { "Key": "Kate_Selene",    "ForbiddenKeys": [] },
-    { "Key": "TaniaTheHermit", "ForbiddenKeys": [] }
+    { "Key": "TaniaTheHermit", "ForbiddenKeys": [] },
+    { "Key": "LiviaSalvian",   "ForbiddenKeys": [] }
   ]
 }

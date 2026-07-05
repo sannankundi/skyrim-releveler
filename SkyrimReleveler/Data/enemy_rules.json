@@ -107,5 +107,7 @@
 
 	"LastendellFactionMidwoodIsle":          [40, 120],
 	"ChampionsLastendellFactionMidwoodIsle": [90, 200],
-	"LastendellEnemyFactionMI":              [70, 180]
+	"LastendellEnemyFactionMI":              [70, 180],
+	
+	"DLC4MQ08UndeadFaction":                 [40, 300]
 }
