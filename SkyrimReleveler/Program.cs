@@ -417,18 +417,52 @@ namespace SkyrimReleveler
 
         // -------------------------------------------------------------------------
         // Civilian detection
+        // Two paths:
+        //   A) Unique humanoid with civilian class term → always civilian
+        //   B) Unique humanoid with a display name and NO qualifying hostile faction
+        //      → named character (3DNPC, EZPG, base game named NPCs, etc.)
+        // Both get PC-scaling with a low random cap.
+        // factionMemberCount may be null during pre-pass A (first count sweep) — in
+        // that case only path A applies.
         // -------------------------------------------------------------------------
-        private static bool IsCivilian(INpcGetter npc, ILinkCache lc)
+        private static bool IsCivilian(INpcGetter npc, ILinkCache lc,
+            Dictionary<string, int>? factionMemberCount = null,
+            int minPeers = 3,
+            Func<string, bool>? isNonHostile = null)
         {
             if (!npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique)) return false;
             if (!npc.Race.TryResolve(lc, out var race)) return false;
             if (!race.HasKeyword(Skyrim.Keyword.ActorTypeNPC)) return false;
-            if (!npc.Class.TryResolve(lc, out var cls)) return false;
-            string clsId   = cls.EditorID ?? "";
-            string clsName = cls.Name?.String ?? "";
-            return CivilianClassTerms.Any(t =>
-                clsId.Contains(t, StringComparison.OrdinalIgnoreCase) ||
-                clsName.Contains(t, StringComparison.OrdinalIgnoreCase));
+
+            // Path A: civilian class term
+            if (npc.Class.TryResolve(lc, out var cls))
+            {
+                string clsId   = cls.EditorID ?? "";
+                string clsName = cls.Name?.String ?? "";
+                if (CivilianClassTerms.Any(t =>
+                    clsId.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                    clsName.Contains(t, StringComparison.OrdinalIgnoreCase)))
+                    return true;
+            }
+
+            // Path B: named NPC with no meaningful hostile faction
+            if (factionMemberCount is not null && isNonHostile is not null)
+            {
+                // Must have a display name to be a "named character"
+                if (string.IsNullOrWhiteSpace(npc.Name?.String)) return false;
+
+                // If they belong to ANY qualifying hostile faction, they're a combatant
+                foreach (var rankEntry in npc.Factions)
+                {
+                    if (!rankEntry.Faction.TryResolve(lc, out var fac) || fac.EditorID is null) continue;
+                    if (isNonHostile(fac.EditorID)) continue;
+                    if (factionMemberCount.TryGetValue(fac.EditorID, out var cnt) && cnt >= minPeers)
+                        return false; // belongs to a real hostile faction → not civilian
+                }
+                return true; // unique, named, humanoid, no hostile faction → named character
+            }
+
+            return false;
         }
 
         // -------------------------------------------------------------------------
@@ -860,7 +894,8 @@ namespace SkyrimReleveler
             if (!File.Exists(namedPath)) { Console.Error.WriteLine($"ERROR: Missing {namedPath}"); return; }
             var namedNpcs = JsonConvert.DeserializeObject<Dictionary<string, int>>(File.ReadAllText(namedPath),
                 new JsonSerializerSettings { Error = (s, a) => a.ErrorContext.Handled = true }) ?? new();
-            Console.WriteLine($"Loaded {namedNpcs.Count} named NPC overrides.");
+            Console.WriteLine("=== Skyrim Releveler — Loading Data ===");
+            Console.WriteLine($"  Named NPC overrides  : {namedNpcs.Count}");
 
             // Load custom followers
             var followersPath = Path.Combine(state.ExtraSettingsDataPath, "customFollowers.json");
@@ -892,7 +927,8 @@ namespace SkyrimReleveler
                 new List<ModKey> { Skyrim.ModKey, Dawnguard.ModKey, Dragonborn.ModKey },
                 GameRelease.SkyrimSE).ToImmutableLinkCache();
 
-            Console.WriteLine("Data files loaded. Starting automatic NPC assessment...");
+            Console.WriteLine("  Data files loaded. Starting pre-pass...");
+            Console.WriteLine();
 
             var linkCache = state.LoadOrder.PriorityOrder.ToImmutableLinkCache();
 
@@ -966,15 +1002,23 @@ namespace SkyrimReleveler
             // per-NPC data so we can pick the LARGEST hostile faction per NPC.
             // -----------------------------------------------------------------------
 
-            // Skip-condition helper used in both passes
-            bool ShouldSkipPrePass(INpcGetter g, string edId) =>
-                npcsToIgnore.Contains(g) ||
-                g.Configuration.Flags.HasFlag(NpcConfiguration.Flag.IsCharGenFacePreset) ||
-                g.HasKeyword(Skyrim.Keyword.PlayerKeyword) ||
-                IsExcluded(edId) ||
-                IsFollower(g) ||
-                FindNamedLevel(edId) is not null ||
-                IsCivilian(g, linkCache);
+            // Skip-condition helper — used in both pre-pass sweeps.
+            // During pre-pass A (first sweep) factionMemberCount is not yet built,
+            // so IsCivilian only uses Path A (class terms).
+            // During pre-pass B and the main pass we pass the full faction data.
+            bool ShouldSkip(INpcGetter g, string edId,
+                Dictionary<string, int>? facCounts = null)
+            {
+                if (npcsToIgnore.Contains(g)) return true;
+                if (g.Configuration.Flags.HasFlag(NpcConfiguration.Flag.IsCharGenFacePreset)) return true;
+                if (g.HasKeyword(Skyrim.Keyword.PlayerKeyword)) return true;
+                if (IsExcluded(edId)) return true;
+                if (IsFollower(g)) return true;
+                if (FindNamedLevel(edId) is not null) return true;
+                if (IsCivilian(g, linkCache, facCounts, minPeers: Settings.AutoFactionMinPeers,
+                    isNonHostile: IsNonHostileFaction)) return true;
+                return false;
+            }
 
             // factionMemberCount[factionEditorId] = total NPC count across load order
             var factionMemberCount = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -993,7 +1037,7 @@ namespace SkyrimReleveler
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
                 if (getter.EditorID is not { } edId0) continue;
-                if (ShouldSkipPrePass(getter, edId0)) continue;
+                if (ShouldSkip(getter, edId0)) continue;  // pre-pass A: no faction data yet
                 foreach (var rankEntry in getter.Factions)
                 {
                     if (!rankEntry.Faction.TryResolve(linkCache, out var fac) || fac.EditorID is null) continue;
@@ -1020,7 +1064,7 @@ namespace SkyrimReleveler
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
                 if (getter.EditorID is not { } edId) continue;
-                if (ShouldSkipPrePass(getter, edId)) continue;
+                if (ShouldSkip(getter, edId, factionMemberCount)) continue;  // pre-pass B: full data
 
                 int? effLevel = GetEffectiveLevel(getter);
                 int tier = ClassifyNpc(getter, linkCache);
@@ -1092,11 +1136,38 @@ namespace SkyrimReleveler
                 if (lvls.Count >= 1)
                     raceSourceRange[rk] = GetTrimmedRange(lvls, cutoff);
 
+            // Stem groups as Path 3 — within same tier only, minimum 5 members
+            // stemKey = tier.ToString() + "|" + stem
+            var stemEffLevels = new Dictionary<string, List<int>>();
+            foreach (var a in assessments.Values)
+            {
+                if (a.EffectiveLevel is null || a.EffectiveLevel.Value <= 0) continue;
+                // Only use stem path for NPCs that have no qualifying faction
+                if (a.FactionKey is not null && factionSourceRange.ContainsKey(a.FactionKey)) continue;
+                string stem = GetStem(a.EditorId);
+                string stemKey = $"{a.Tier}|{stem}";
+                if (!stemEffLevels.TryGetValue(stemKey, out var sl))
+                    stemEffLevels[stemKey] = sl = new List<int>();
+                sl.Add(a.EffectiveLevel.Value);
+            }
+            foreach (var lst in stemEffLevels.Values) lst.Sort();
+
+            var stemSourceRange = new Dictionary<string, (int Min, int Max)>();
+            foreach (var (sk, lvls) in stemEffLevels)
+                if (lvls.Count >= 5)
+                    stemSourceRange[sk] = GetTrimmedRange(lvls, cutoff);
+
             var tierSourceRange = new Dictionary<int, (int Min, int Max)>();
             foreach (var (tk, lvls) in tierEffLevels)
                 tierSourceRange[tk] = GetTrimmedRange(lvls, cutoff);
 
-            Console.WriteLine($"Pre-pass complete. {assessments.Count} NPCs | {factionSourceRange.Count} factions with ranges.");
+            Console.WriteLine();
+            Console.WriteLine("=== Skyrim Releveler — Assessment Pass ===");
+            Console.WriteLine($"  NPCs assessed        : {assessments.Count}");
+            Console.WriteLine($"  Factions with ranges : {factionSourceRange.Count}");
+            Console.WriteLine($"  Stem groups (Path 3) : {stemSourceRange.Count}");
+            Console.WriteLine($"  Tiers covered        : {tierSourceRange.Count}");
+            Console.WriteLine();
 
             // -----------------------------------------------------------------------
             // Level computation — faction-first, then race, then tier-global
@@ -1110,7 +1181,7 @@ namespace SkyrimReleveler
                 decimal baseLevel;
                 string mode;
 
-                // PATH 1: NPC has a large enough faction — use faction source range mapped to tier range
+                // PATH 1: largest hostile faction with enough members
                 if (a.FactionKey is not null && factionSourceRange.TryGetValue(a.FactionKey, out var fsr))
                 {
                     int clamped = Math.Clamp(effLvl > 0 ? effLvl : fsr.Min, fsr.Min, fsr.Max);
@@ -1119,7 +1190,7 @@ namespace SkyrimReleveler
                         : Math.Round((tMin + tMax) / 2m);
                     mode = $"faction({a.FactionKey}) src=[{fsr.Min},{fsr.Max}]";
                 }
-                // PATH 2: No qualifying faction — use race source range
+                // PATH 2: race peers
                 else if (raceSourceRange.TryGetValue(a.RaceFormKey, out var rsr))
                 {
                     int clamped = Math.Clamp(effLvl > 0 ? effLvl : rsr.Min, rsr.Min, rsr.Max);
@@ -1128,11 +1199,25 @@ namespace SkyrimReleveler
                         : Math.Round((tMin + tMax) / 2m);
                     mode = $"race src=[{rsr.Min},{rsr.Max}]";
                 }
-                // PATH 3: No faction, no race peers — use equipment score within tier range
+                // PATH 3: EditorID stem group (within same tier, ≥5 members)
                 else
                 {
-                    baseLevel = Math.Round(tMin + (decimal)a.EquipmentScore * (tMax - tMin));
-                    mode = "equipment-score";
+                    string stem = GetStem(a.EditorId);
+                    string stemKey = $"{tier}|{stem}";
+                    if (stemSourceRange.TryGetValue(stemKey, out var ssr))
+                    {
+                        int clamped = Math.Clamp(effLvl > 0 ? effLvl : ssr.Min, ssr.Min, ssr.Max);
+                        baseLevel = effLvl > 0
+                            ? MapLevel(clamped, ssr.Min, ssr.Max, tMin, tMax)
+                            : Math.Round((tMin + tMax) / 2m);
+                        mode = $"stem({stem}) src=[{ssr.Min},{ssr.Max}]";
+                    }
+                    // PATH 4: equipment score within tier range (pure fallback)
+                    else
+                    {
+                        baseLevel = Math.Round(tMin + (decimal)a.EquipmentScore * (tMax - tMin));
+                        mode = "equipment-score";
+                    }
                 }
 
                 if (Settings.PrintDebugOutput)
@@ -1179,8 +1264,9 @@ namespace SkyrimReleveler
                     wasChanged = true;
                     ++namedCount;
                 }
-                // Priority 3: civilians
-                else if (IsCivilian(getter, linkCache))
+                // Priority 3: civilians (class-based) and named characters (no hostile faction)
+                else if (IsCivilian(getter, linkCache, factionMemberCount,
+                    Settings.AutoFactionMinPeers, IsNonHostileFaction))
                 {
                     npcCopy.Configuration.Level = new PcLevelMult { LevelMult = 1f };
                     npcCopy.Configuration.CalcMinLevel = 1;
@@ -1224,12 +1310,20 @@ namespace SkyrimReleveler
                     state.PatchMod.Npcs.Set(npcCopy);
 
                 ++npcsProcessed;
-                if (npcsProcessed % 1000 == 0) Console.WriteLine($"Processed {npcsProcessed} NPCs...");
+                if (npcsProcessed % 2000 == 0)
+                    Console.WriteLine($"  ... {npcsProcessed} NPCs processed");
             }
 
             DisableExtraDamagePerks(state);
 
-            Console.WriteLine($"Done. Total={npcsProcessed} | Pipeline={pipelineCount} | Named={namedCount} | Civilians={civiliansScaled} | Followers={followersScaled}");
+            Console.WriteLine();
+            Console.WriteLine("=== Skyrim Releveler Complete ===");
+            Console.WriteLine($"  Total NPCs processed : {npcsProcessed}");
+            Console.WriteLine($"  Releveled (pipeline) : {pipelineCount}");
+            Console.WriteLine($"  Named overrides      : {namedCount}");
+            Console.WriteLine($"  Civilians / named chars : {civiliansScaled}");
+            Console.WriteLine($"  Followers            : {followersScaled}");
+            Console.WriteLine();
             PrintWarnings();
         }
     }
