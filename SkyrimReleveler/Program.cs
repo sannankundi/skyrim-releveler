@@ -10,7 +10,6 @@ using Mutagen.Bethesda.Plugins.Records;
 using Mutagen.Bethesda.Synthesis;
 using Mutagen.Bethesda.Skyrim;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using Noggog;
 using System.Collections.Immutable;
 using System.IO;
@@ -40,15 +39,93 @@ namespace SkyrimReleveler
         [JsonProperty] public List<RaceEntry> Data { get; set; } = new();
     }
 
+    // -------------------------------------------------------------------------
+    // Tier system
+    // -------------------------------------------------------------------------
+    public static class TierSystem
+    {
+        public const int Count = 15;
+
+        // Base ranges at WorldMaxLevel = 1000. Scaled proportionally at runtime.
+        private static readonly (int Min, int Max)[] BaseRanges = new (int, int)[]
+        {
+            (800, 1000), // 0  Cosmic
+            (600,  800), // 1  World-ender
+            (350,  600), // 2  Dragon
+            (250,  450), // 3  Ancient Lich / Dragon Priest
+            (200,  380), // 4  High Daedra
+            (160,  300), // 5  Vampire Lord / Soul Cairn
+            (140,  260), // 6  Elite Construct
+            (100,  200), // 7  Falmer / Mid Daedra / Giant
+            ( 80,  180), // 8  Vampire / Gargoyle / Werewolf
+            ( 60,  140), // 9  Draugr / Atronach / Skeleton Lord
+            ( 45,  110), // 10 Spriggan / Hagrave / Troll
+            ( 30,   80), // 11 Dangerous Wildlife
+            ( 15,  120), // 12 Humanoid Enemy
+            ( 10,   60), // 13 Standard Creature
+            (  1,   20), // 14 Vermin / Passive Animal
+        };
+
+        private static readonly string[] Names = new[]
+        {
+            "Cosmic",
+            "World-ender",
+            "Dragon",
+            "Ancient Lich / Dragon Priest",
+            "High Daedra",
+            "Vampire Lord / Soul Cairn",
+            "Elite Construct",
+            "Falmer / Mid Daedra / Giant",
+            "Vampire / Gargoyle / Werewolf",
+            "Draugr / Atronach / Skeleton Lord",
+            "Spriggan / Hagrave / Troll",
+            "Dangerous Wildlife",
+            "Humanoid Enemy",
+            "Standard Creature",
+            "Vermin / Passive Animal",
+        };
+
+        public static (int Min, int Max) GetRange(int tier, int worldMaxLevel)
+        {
+            var (bMin, bMax) = BaseRanges[tier];
+            double scale = worldMaxLevel / 1000.0;
+            return ((int)Math.Round(bMin * scale), (int)Math.Round(bMax * scale));
+        }
+
+        public static string GetName(int tier) => Names[tier];
+    }
+
+    // -------------------------------------------------------------------------
+    // Per-NPC data collected in the pre-pass
+    // -------------------------------------------------------------------------
+    public class NpcAssessment
+    {
+        public FormKey FormKey { get; set; }
+        public string EditorId { get; set; } = "";
+        public int Tier { get; set; } = 12;
+        public int? EffectiveLevel { get; set; }
+        public int CalcMax { get; set; }
+        public float EquipmentScore { get; set; }
+        // Peer group: faction EditorID (first hostile faction found), race FormKey
+        public string? FactionKey { get; set; }
+        public FormKey RaceFormKey { get; set; }
+    }
+
     public class Program
     {
         private static Lazy<Settings> _lazySettings = null!;
         private static Settings Settings => _lazySettings.Value;
         private static readonly Random Rng = new Random(42);
 
-        public static List<string> underleveledNpcs = new();
-        public static List<string> overleveledNpcs = new();
         public static List<string> highPoweredNpcs = new();
+
+        // Civilian class terms — NPCs with Unique flag and one of these class terms stay PC-scaled
+        private static readonly List<string> CivilianClassTerms = new()
+        {
+            "smith", "alchem", "enchant", "vendor", "apothec",
+            "innkeep", "merchant", "farmer", "miner", "beggar",
+            "priest", "bard", "jarl", "steward"
+        };
 
         // Classes whose NPCs are skipped during class rebuild (vendors, crafters, etc.)
         private static readonly List<string> ExcludedClasses = new()
@@ -70,7 +147,9 @@ namespace SkyrimReleveler
                 .Run(args);
         }
 
-        // Priority: fixed NpcLevel first (authoritative post-TUS), then CalcMaxLevel, then CalcMinLevel.
+        // -------------------------------------------------------------------------
+        // Level utilities
+        // -------------------------------------------------------------------------
         public static int? GetEffectiveLevel(INpcGetter npc)
         {
             switch (npc.Configuration.Level)
@@ -86,7 +165,6 @@ namespace SkyrimReleveler
             }
         }
 
-        // Stem used only for flat factions — strips prefix/suffix to get a meaningful type name.
         public static string GetStem(string editorId)
         {
             string s = editorId;
@@ -148,7 +226,213 @@ namespace SkyrimReleveler
         }
 
         // -------------------------------------------------------------------------
-        // Skill redistribution (ported from TUS)
+        // Classifier — assigns a tier (0-14) to an NPC
+        // -------------------------------------------------------------------------
+        private static bool ContainsAny(string? s, params string[] patterns)
+        {
+            if (s is null) return false;
+            foreach (var p in patterns)
+                if (s.Contains(p, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        public static int ClassifyNpc(INpcGetter npc, ILinkCache lc)
+        {
+            string? editorId  = npc.EditorID;
+            string? npcName   = npc.Name?.String;
+            string? raceEditorId = null;
+
+            if (npc.Race.TryResolve(lc, out var race))
+                raceEditorId = race.EditorID;
+
+            // --- Step 1: broad category from race keywords ---
+            int tier = ClassifyByRaceKeyword(race, raceEditorId);
+
+            // --- Step 2: NPC EditorID / display name overrides (applied after race, only upgrade) ---
+            tier = ApplyNpcNameOverrides(tier, editorId, npcName);
+
+            // --- Step 3: NPC keyword overrides (vampire flags) ---
+            tier = ApplyNpcKeywordOverrides(npc, tier, lc);
+
+            return tier;
+        }
+
+        private static int ClassifyByRaceKeyword(IRaceGetter? race, string? raceEditorId)
+        {
+            if (race is null) return 12; // default humanoid
+
+            // Priority order matches requirements
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeDragon))
+                return ClassifyDragon(raceEditorId);
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeDaedra))
+                return ClassifyDaedra(raceEditorId);
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeUndead))
+                return ClassifyUndead(raceEditorId);
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeDwarven))
+                return ClassifyConstruct(raceEditorId);
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeGhost))
+                return 9; // spirits/ghosts classified as undead tier
+            // Werewolf detection via race EditorID (no vanilla FormKey constant available)
+            if (race.EditorID?.Contains("Werewolf", StringComparison.OrdinalIgnoreCase) == true ||
+                race.EditorID?.Contains("Werebear",  StringComparison.OrdinalIgnoreCase) == true ||
+                race.EditorID?.Contains("Werebat",   StringComparison.OrdinalIgnoreCase) == true)
+                return 8;
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeNPC))
+                return ClassifyHumanoid(raceEditorId);
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeAnimal))
+                return 14;
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeCreature))
+                return ClassifyCreature(raceEditorId);
+
+            // No keyword matched — fall back to humanoid
+            return 12;
+        }
+
+        private static int ClassifyDragon(string? raceId)
+        {
+            if (raceId is null) return 2;
+            if (raceId.Equals("AlduinRace", StringComparison.OrdinalIgnoreCase)) return 1;
+            if (ContainsAny(raceId, "DragonPriest")) return 3;
+            return 2;
+        }
+
+        private static int ClassifyDaedra(string? raceId)
+        {
+            if (raceId is null) return 4;
+            // High daedra tier
+            if (ContainsAny(raceId, "Dremora", "Xivilai", "Xivkyn", "GoldenSaint", "DarkSeducer"))
+                return 4;
+            // Mid daedra tier
+            if (ContainsAny(raceId, "Scamp", "Clannfear", "Daedroth"))
+                return 7;
+            return 4; // default Daedra = high
+        }
+
+        private static int ClassifyUndead(string? raceId)
+        {
+            if (raceId is null) return 9;
+            if (ContainsAny(raceId, "VampireLord", "VampireBeast", "SoulCairn")) return 5;
+            if (ContainsAny(raceId, "Lich")) return 3;
+            // Everything else: draugr, skeleton, spirit, wraith, etc.
+            return 9;
+        }
+
+        private static int ClassifyConstruct(string? raceId)
+        {
+            if (raceId is null) return 9;
+            if (ContainsAny(raceId, "Centurion", "Forgemaster", "Colossus", "Golem")) return 6;
+            return 9;
+        }
+
+        private static int ClassifyHumanoid(string? raceId)
+        {
+            if (raceId is null) return 12;
+            if (ContainsAny(raceId, "SnowElf", "Falmer")) return 7;
+            return 12;
+        }
+
+        private static int ClassifyCreature(string? raceId)
+        {
+            if (raceId is null) return 13;
+            if (ContainsAny(raceId, "Mammoth", "Giant", "Troll", "Hagrave", "Spriggan", "Chaurus", "Falmer"))
+                return 7;
+            if (ContainsAny(raceId, "Bear", "Sabrecat", "Wolf", "Spider", "DeathHound",
+                                    "Gargoyle", "IceWraith", "Wispmother", "Wispmother", "Wisp"))
+                return 11;
+            return 13;
+        }
+
+        private static int ApplyNpcNameOverrides(int currentTier, string? editorId, string? name)
+        {
+            // Only upgrades (lower tier number = more powerful). Never downgrades.
+            // Cosmic override
+            if (ContainsAny(editorId, "MolagBal", "Jyggalag", "Shoggoth", "DaedricPrince") ||
+                ContainsAny(name,     "MolagBal", "Jyggalag", "Shoggoth", "Daedric Prince"))
+                return Math.Min(currentTier, 0);
+
+            // Dragon priest / lich elevation
+            if (ContainsAny(editorId, "DragonPriest", "Lich", "Necromancer") ||
+                ContainsAny(name,     "Dragon Priest", "Lich", "Necromancer"))
+                return Math.Min(currentTier, 3);
+
+            // Vampire elevation
+            if (ContainsAny(editorId, "VampireLord") || ContainsAny(name, "Vampire Lord"))
+                return Math.Min(currentTier, 5);
+            if (ContainsAny(editorId, "Vampire") || ContainsAny(name, "Vampire"))
+                return Math.Min(currentTier, 8);
+
+            // Undead elevation
+            if (ContainsAny(editorId, "Zombie", "Undead", "Ghost", "Wraith", "Shade") ||
+                ContainsAny(name,     "Zombie", "Undead", "Ghost", "Wraith", "Shade"))
+                return Math.Min(currentTier, 9);
+
+            // Construct elevation
+            if (ContainsAny(editorId, "Golem", "Construct", "Automaton", "Centurion") ||
+                ContainsAny(name,     "Golem", "Construct", "Automaton", "Centurion"))
+                return Math.Min(currentTier, 6);
+
+            return currentTier;
+        }
+
+        private static int ApplyNpcKeywordOverrides(INpcGetter npc, int currentTier, ILinkCache lc)
+        {
+            // DLC1_IS_Vampire — resolve by EditorID since the FormKey constant isn't always available
+            if (npc.Keywords?.Any(k =>
+                    k.TryResolve(lc, out var kw) &&
+                    (kw.EditorID?.Equals("DLC1_IS_Vampire", StringComparison.OrdinalIgnoreCase) == true))
+                == true)
+                return Math.Min(currentTier, 5);
+
+            // Generic Vampire keyword → at least Tier 8
+            if (npc.HasKeyword(Skyrim.Keyword.Vampire))
+                return Math.Min(currentTier, 8);
+
+            return currentTier;
+        }
+
+        // -------------------------------------------------------------------------
+        // Equipment score — reuses existing skill-weight population
+        // -------------------------------------------------------------------------
+        public static float ComputeEquipmentScore(INpcGetter npc, ILinkCache lc)
+        {
+            IDictionary<Skill, float> w = new Dictionary<Skill, float>();
+            foreach (Skill sk in Enum.GetValues(typeof(Skill))) w[sk] = 0f;
+
+            PopulateByInventory(npc, w, lc);
+            PopulateBySpells(npc, w, lc);
+
+            // Outfit population requires a mutable Npc — approximate via inventory only
+            // (outfit weights already partially captured by inventory traversal)
+
+            float total = w.Values.Sum();
+            return total > 0 ? Math.Min(total / 20f, 1f) : 0f;
+        }
+
+        // -------------------------------------------------------------------------
+        // Civilian detection
+        // -------------------------------------------------------------------------
+        private static bool IsCivilian(INpcGetter npc, ILinkCache lc)
+        {
+            if (!npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique)) return false;
+            if (!npc.Race.TryResolve(lc, out var race)) return false;
+            if (!race.HasKeyword(Skyrim.Keyword.ActorTypeNPC)) return false;
+            if (!npc.Class.TryResolve(lc, out var cls)) return false;
+            string clsId   = cls.EditorID ?? "";
+            string clsName = cls.Name?.String ?? "";
+            return CivilianClassTerms.Any(t =>
+                clsId.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                clsName.Contains(t, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // -------------------------------------------------------------------------
+        // Skill redistribution
         // -------------------------------------------------------------------------
         private static void DistributeSkills(
             IReadOnlyDictionary<Skill, byte> skillWeights,
@@ -192,7 +476,7 @@ namespace SkyrimReleveler
         }
 
         // -------------------------------------------------------------------------
-        // Class rebuild (ported from TUS)
+        // Class rebuild
         // -------------------------------------------------------------------------
         private static void GetItemSkillWeights(IItemGetter item, IDictionary<Skill, float> w, float div = 1)
         {
@@ -403,7 +687,7 @@ namespace SkyrimReleveler
         }
 
         // -------------------------------------------------------------------------
-        // Perk distribution (ported from TUS)
+        // Perk distribution
         // -------------------------------------------------------------------------
         private static bool GetTreeFromSkill(Skill s, ILinkCache lc, out IActorValueInformationGetter? av)
         {
@@ -487,7 +771,6 @@ namespace SkyrimReleveler
             if (!npc.Class.TryResolve<IClassGetter>(lc, out var cls)) return false;
             if (!npc.Race.TryResolve<IRaceGetter>(lc, out var race)) return false;
             if (!race.HasKeyword(Skyrim.Keyword.ActorTypeNPC) && !race.HasKeyword(Skyrim.Keyword.ActorTypeUndead)) return false;
-            // Check keyword filter
             foreach (var kw in Settings.PerkDistributionFilter)
                 if (npc.HasKeyword(kw) || race.HasKeyword(kw)) return false;
 
@@ -548,6 +831,22 @@ namespace SkyrimReleveler
             }
         }
 
+        public static void ApplyLevel(INpc npc, short newLevel)
+        {
+            npc.Configuration.Level = new NpcLevel() { Level = newLevel };
+            npc.Configuration.CalcMinLevel = 1;
+            npc.Configuration.CalcMaxLevel = newLevel;
+        }
+
+        public static void PrintWarnings()
+        {
+            if (highPoweredNpcs.Count > 0)
+            {
+                Console.WriteLine($"Warning: {highPoweredNpcs.Count} NPCs assigned level > 100:");
+                foreach (var item in highPoweredNpcs) Console.WriteLine("  " + item);
+            }
+        }
+
         // -------------------------------------------------------------------------
         // RunPatch
         // -------------------------------------------------------------------------
@@ -555,19 +854,6 @@ namespace SkyrimReleveler
         {
             if (state.ExtraSettingsDataPath is null)
             { Console.Error.WriteLine("ERROR: ExtraSettingsDataPath is null."); return; }
-
-            // Load enemy rules
-            var rulesPath = Path.Combine(state.ExtraSettingsDataPath, "enemy_rules.json");
-            if (!File.Exists(rulesPath)) { Console.Error.WriteLine($"ERROR: Missing {rulesPath}"); return; }
-            var rulesJson = File.ReadAllText(rulesPath);
-            var enemyRules = JsonConvert.DeserializeObject<Dictionary<string, int[]>>(rulesJson,
-                new JsonSerializerSettings { Error = (s, a) => a.ErrorContext.Handled = true })!;
-            // Preserve JSON order, use Contains matching for faction IDs
-            var orderedRules = JObject.Parse(rulesJson).Properties()
-                .Where(p => enemyRules.ContainsKey(p.Name))
-                .Select(p => (Faction: p.Name, Rule: enemyRules[p.Name]))
-                .ToList();
-            Console.WriteLine($"Loaded {orderedRules.Count} faction rules.");
 
             // Load named NPC overrides
             var namedPath = Path.Combine(state.ExtraSettingsDataPath, "named_npcs.json");
@@ -600,20 +886,19 @@ namespace SkyrimReleveler
                 ? JsonConvert.DeserializeObject<RaceModifierList>(File.ReadAllText(racePath)) ?? new()
                 : new RaceModifierList();
 
-            // Vanilla-only link cache for perk removal — only loaded if actually needed.
             ILinkCache? vanillaCache = null;
             ILinkCache GetVanillaCache() => vanillaCache ??= LoadOrder.Import<ISkyrimModGetter>(
                 state.DataFolderPath,
                 new List<ModKey> { Skyrim.ModKey, Dawnguard.ModKey, Dragonborn.ModKey },
                 GameRelease.SkyrimSE).ToImmutableLinkCache();
 
-            Console.WriteLine("Data files loaded. Starting patch...");
+            Console.WriteLine("Data files loaded. Starting automatic NPC assessment...");
 
-            // Build a single immutable link cache used for the entire patch — same as TUS's Patcher.LinkCache.
-            // Much faster than using state.LinkCache which rebuilds on each access in newer Mutagen.
             var linkCache = state.LoadOrder.PriorityOrder.ToImmutableLinkCache();
 
-            // --- Helpers ---
+            // -----------------------------------------------------------------------
+            // Helper closures
+            // -----------------------------------------------------------------------
             static List<string> SplitTokens(string s)
             {
                 var tokens = new List<string>(); int start = 0;
@@ -676,11 +961,17 @@ namespace SkyrimReleveler
                     { add = entry.LevelModifierAdd; mult = entry.LevelModifierMult; return; }
             }
 
-            // --- Single discovery pass: collect levels, stems, and cache faction match per NPC ---
-            // npcFactionCache[formKey] = (matchedFactionKey, effectiveLevel)
-            var npcFactionCache = new Dictionary<FormKey, (string Faction, int EffLevel)>();
-            var factionAllLevels = new Dictionary<string, List<int>>();
-            var flatFactionStems = new Dictionary<string, List<string>>();
+            // -----------------------------------------------------------------------
+            // Pre-pass: classify every eligible NPC and collect peer data
+            // -----------------------------------------------------------------------
+            // assessments[formKey] = NpcAssessment
+            var assessments = new Dictionary<FormKey, NpcAssessment>();
+            // faction peers: factionEditorId -> list of formKeys in that faction
+            var factionPeers = new Dictionary<string, List<FormKey>>(StringComparer.OrdinalIgnoreCase);
+            // race peers: raceFormKey -> list of formKeys with that race
+            var racePeers   = new Dictionary<FormKey, List<FormKey>>();
+            // tier members: tier -> list of formKeys
+            var tierMembers = new Dictionary<int, List<FormKey>>();
 
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
@@ -689,65 +980,173 @@ namespace SkyrimReleveler
                 if (getter.Configuration.Flags.HasFlag(NpcConfiguration.Flag.IsCharGenFacePreset) ||
                     getter.HasKeyword(Skyrim.Keyword.PlayerKeyword)) continue;
                 if (IsExcluded(edId)) continue;
-                if (FindNamedLevel(edId) is not null) continue;
                 if (IsFollower(getter)) continue;
-                int? eff = GetEffectiveLevel(getter);
-                if (eff is null) continue;
+                if (FindNamedLevel(edId) is not null) continue;
+                if (IsCivilian(getter, linkCache)) continue;
 
-                string? firstMatchedKey = null;
-                foreach (var rank in getter.Factions)
+                int? effLevel = GetEffectiveLevel(getter);
+
+                int tier = ClassifyNpc(getter, linkCache);
+
+                // First hostile faction for peer grouping
+                string? factionKey = null;
+                foreach (var rankEntry in getter.Factions)
                 {
-                    if (!rank.Faction.TryResolve(linkCache, out var fac) || fac.EditorID is null) continue;
-                    var matchedKey = orderedRules.FirstOrDefault(r =>
-                        fac.EditorID.Contains(r.Faction, StringComparison.OrdinalIgnoreCase)).Faction;
-                    if (matchedKey is null) continue;
-
-                    // Collect levels for source range calculation
-                    if (!factionAllLevels.TryGetValue(matchedKey, out var lst))
-                        factionAllLevels[matchedKey] = lst = new List<int>();
-                    lst.Add(eff.Value);
-
-                    // Cache the first (highest priority) faction match for Pass 2
-                    firstMatchedKey ??= matchedKey;
+                    if (!rankEntry.Faction.TryResolve(linkCache, out var fac) || fac.EditorID is null) continue;
+                    // Skip obviously non-hostile factions (follower, crime, vendor, player)
+                    if (fac.EditorID.Contains("Follower", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (fac.EditorID.Contains("Vendor",   StringComparison.OrdinalIgnoreCase)) continue;
+                    if (fac.EditorID.Contains("Player",   StringComparison.OrdinalIgnoreCase)) continue;
+                    factionKey = fac.EditorID;
+                    break;
                 }
 
-                if (firstMatchedKey is not null)
-                    npcFactionCache[getter.FormKey] = (firstMatchedKey, eff.Value);
+                FormKey raceFormKey = getter.Race.FormKey;
+                float equipScore = ComputeEquipmentScore(getter, linkCache);
+                int calcMax = getter.Configuration.CalcMaxLevel;
+
+                var assessment = new NpcAssessment
+                {
+                    FormKey       = getter.FormKey,
+                    EditorId      = edId,
+                    Tier          = tier,
+                    EffectiveLevel = effLevel,
+                    CalcMax       = calcMax,
+                    EquipmentScore = equipScore,
+                    FactionKey    = factionKey,
+                    RaceFormKey   = raceFormKey,
+                };
+                assessments[getter.FormKey] = assessment;
+
+                // Register in peer indices
+                if (factionKey is not null)
+                {
+                    if (!factionPeers.TryGetValue(factionKey, out var fl))
+                        factionPeers[factionKey] = fl = new List<FormKey>();
+                    fl.Add(getter.FormKey);
+                }
+
+                if (!racePeers.TryGetValue(raceFormKey, out var rl))
+                    racePeers[raceFormKey] = rl = new List<FormKey>();
+                rl.Add(getter.FormKey);
+
+                if (!tierMembers.TryGetValue(tier, out var tl))
+                    tierMembers[tier] = tl = new List<FormKey>();
+                tl.Add(getter.FormKey);
             }
 
-            var flatFactions = new HashSet<string>(
-                factionAllLevels.Where(kvp => kvp.Value.Distinct().Count() == 1).Select(kvp => kvp.Key));
+            Console.WriteLine($"Pre-pass complete. {assessments.Count} NPCs assessed across {tierMembers.Count} tiers.");
 
-            var factionSourceRange = new Dictionary<string, (int Min, int Max)>();
-            float cutoff = Settings.OutlierPercentileCutoff;
-            foreach (var (fId, lvls) in factionAllLevels)
-                if (!flatFactions.Contains(fId))
-                    factionSourceRange[fId] = GetTrimmedRange(lvls, cutoff);
-
-            // Collect stems for flat factions — only needs a second pass over the already-cached NPCs
-            foreach (var (formKey, cached) in npcFactionCache)
+            // -----------------------------------------------------------------------
+            // Compute percentile helpers
+            // -----------------------------------------------------------------------
+            // Returns a 0-1 percentile rank of value within a sorted list of values.
+            static float Percentile(int value, List<int> sorted)
             {
-                if (!flatFactions.Contains(cached.Faction)) continue;
-                if (!linkCache.TryResolve<INpcGetter>(formKey, out var npcGetter) || npcGetter.EditorID is null) continue;
-                if (!flatFactionStems.TryGetValue(cached.Faction, out var stems))
-                    flatFactionStems[cached.Faction] = stems = new List<string>();
-                string stem = GetStem(npcGetter.EditorID);
-                if (!stems.Contains(stem)) stems.Add(stem);
+                if (sorted.Count == 0) return 0.5f;
+                if (sorted.Count == 1) return 0.5f;
+                int lo = sorted.Count - 1;
+                for (int i = 0; i < sorted.Count; i++)
+                    if (sorted[i] >= value) { lo = i; break; }
+                return (float)lo / (sorted.Count - 1);
             }
 
-            if (Settings.PrintDebugOutput)
+            // Pre-sort peer level lists for fast percentile lookups
+            var factionEffLevels  = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+            var factionCalcMaxes  = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+            var raceEffLevels     = new Dictionary<FormKey, List<int>>();
+            var raceCalcMaxes     = new Dictionary<FormKey, List<int>>();
+            var tierEffLevels     = new Dictionary<int, List<int>>();
+            var tierCalcMaxes     = new Dictionary<int, List<int>>();
+
+            foreach (var (fk, members) in factionPeers)
             {
-                foreach (var (fId, stems) in flatFactionStems)
-                    Console.WriteLine($"Flat faction {fId}: {stems.Count} stems: {string.Join(", ", stems)}");
-                foreach (var (fId, range) in factionSourceRange.OrderBy(x => x.Key))
-                    Console.WriteLine($"Non-flat faction {fId}: source [{range.Min},{range.Max}] ({factionAllLevels[fId].Count} members)");
+                factionEffLevels[fk] = members
+                    .Select(m => assessments[m].EffectiveLevel ?? 0)
+                    .Where(v => v > 0).OrderBy(v => v).ToList();
+                factionCalcMaxes[fk] = members
+                    .Select(m => assessments[m].CalcMax)
+                    .Where(v => v > 0).OrderBy(v => v).ToList();
+            }
+            foreach (var (rk, members) in racePeers)
+            {
+                raceEffLevels[rk] = members
+                    .Select(m => assessments[m].EffectiveLevel ?? 0)
+                    .Where(v => v > 0).OrderBy(v => v).ToList();
+                raceCalcMaxes[rk] = members
+                    .Select(m => assessments[m].CalcMax)
+                    .Where(v => v > 0).OrderBy(v => v).ToList();
+            }
+            foreach (var (tk, members) in tierMembers)
+            {
+                tierEffLevels[tk] = members
+                    .Select(m => assessments[m].EffectiveLevel ?? 0)
+                    .Where(v => v > 0).OrderBy(v => v).ToList();
+                tierCalcMaxes[tk] = members
+                    .Select(m => assessments[m].CalcMax)
+                    .Where(v => v > 0).OrderBy(v => v).ToList();
             }
 
-            // --- Pass 2: relevel + redistribute skills/perks ---
-            // Level assignment: only faction-matched, named, and follower NPCs.
-            // Class rebuild + skill redistribution + perk distribution: ALL NPCs (same as TUS).
-            // Uses DeepCopy+Set pattern — avoids GetOrAddAsOverride overhead.
-            int followersScaled = 0, npcsReleveled = 0, npcsProcessed = 0;
+            int minPeers = Settings.AutoFactionMinPeers;
+
+            float ComputeScore(NpcAssessment a)
+            {
+                int tier = a.Tier;
+                string? fk = a.FactionKey;
+                FormKey rk = a.RaceFormKey;
+
+                // Select peer group for eff level and calcMax percentiles
+                List<int> effList, calcList;
+                string peerType;
+
+                bool hasFactionPeers = fk is not null
+                    && factionPeers.TryGetValue(fk, out var fp) && fp.Count >= minPeers
+                    && factionEffLevels.TryGetValue(fk, out var feList) && feList.Count > 0;
+
+                if (hasFactionPeers)
+                {
+                    effList  = factionEffLevels[fk!];
+                    calcList = factionCalcMaxes.TryGetValue(fk!, out var fcl) ? fcl : new List<int>();
+                    peerType = "faction";
+                }
+                else if (raceEffLevels.TryGetValue(rk, out var reList) && reList.Count > 0)
+                {
+                    effList  = reList;
+                    calcList = raceCalcMaxes.TryGetValue(rk, out var rcl) ? rcl : new List<int>();
+                    peerType = "race";
+                }
+                else
+                {
+                    effList  = tierEffLevels.TryGetValue(tier, out var teList) ? teList : new List<int>();
+                    calcList = tierCalcMaxes.TryGetValue(tier, out var tcl)    ? tcl    : new List<int>();
+                    peerType = "tier-global";
+                }
+
+                if (Settings.PrintDebugOutput)
+                    Console.WriteLine($"    {a.EditorId}: tier {tier} ({TierSystem.GetName(tier)}), peers={peerType}");
+
+                float effPct    = a.EffectiveLevel.HasValue && effList.Count > 0
+                    ? Percentile(a.EffectiveLevel.Value, effList) : -1f;
+                float calcPct   = a.CalcMax > 0 && calcList.Count > 0
+                    ? Percentile(a.CalcMax, calcList) : -1f;
+                float equipPct  = a.EquipmentScore; // already 0-1
+
+                // Weighted sum with normalization for missing signals
+                float w1 = 0.4f, w2 = 0.3f, w3 = 0.3f;
+                float totalW = 0f, total = 0f;
+                if (effPct   >= 0) { total += effPct   * w1; totalW += w1; }
+                if (equipPct >= 0) { total += equipPct * w2; totalW += w2; }
+                if (calcPct  >= 0) { total += calcPct  * w3; totalW += w3; }
+
+                return totalW > 0 ? total / totalW : 0.5f;
+            }
+
+            // -----------------------------------------------------------------------
+            // Main pass: assign levels and apply all subsystems
+            // -----------------------------------------------------------------------
+            int followersScaled = 0, namedCount = 0, civiliansScaled = 0,
+                pipelineCount = 0, npcsProcessed = 0;
+
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
                 if (npcsToIgnore.Contains(getter)) continue;
@@ -759,8 +1158,7 @@ namespace SkyrimReleveler
                 Npc npcCopy = getter.DeepCopy();
                 bool wasChanged = false;
 
-                // --- Level assignment (faction/named/follower only) ---
-
+                // Priority 1: followers
                 if (IsFollower(getter))
                 {
                     npcCopy.Configuration.Level = new PcLevelMult { LevelMult = 1f };
@@ -770,6 +1168,7 @@ namespace SkyrimReleveler
                     wasChanged = true;
                     if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: follower -> unlimited scaling");
                 }
+                // Priority 2: named overrides
                 else if (FindNamedLevel(editorId) is { } namedLevel)
                 {
                     GetRaceModifier(getter, out var rAdd, out var rMult);
@@ -778,61 +1177,48 @@ namespace SkyrimReleveler
                     if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
                     ApplyLevel(npcCopy, fixedLevel);
                     wasChanged = true;
-                    ++npcsReleveled;
+                    ++namedCount;
                 }
-                else if (npcFactionCache.TryGetValue(getter.FormKey, out var cached))
+                // Priority 3: civilians
+                else if (IsCivilian(getter, linkCache))
                 {
-                    int[]? rule = enemyRules.TryGetValue(cached.Faction, out var r) ? r : null;
-                    if (rule is not null)
-                    {
-                        int effectiveLevel = cached.EffLevel;
-                        int targetMin = rule[0], targetMax = rule[1];
-                        if (effectiveLevel <= targetMax)
-                        {
-                            decimal baseLevel;
-                            string matchedFaction = cached.Faction;
-                            if (flatFactions.Contains(matchedFaction))
-                            {
-                                string stem = GetStem(editorId);
-                                var stems = flatFactionStems.TryGetValue(matchedFaction, out var sl) ? sl : new List<string>();
-                                int count = Math.Max(stems.Count, 1);
-                                int idx = Math.Max(stems.IndexOf(stem), 0);
-                                int bandSize = Math.Max((targetMax - targetMin) / count, 1);
-                                int bandMin = targetMin + idx * bandSize;
-                                int bandMax = idx == count - 1 ? targetMax : bandMin + bandSize - 1;
-                                baseLevel = Rng.Next(bandMin, bandMax + 1) + Settings.GlobalOffset;
-                                if (Settings.PrintDebugOutput)
-                                    Console.WriteLine($"  {editorId} [stem:{stem} {idx+1}/{count}]: flat -> band [{bandMin},{bandMax}] -> {baseLevel}");
-                            }
-                            else
-                            {
-                                (int srcMin, int srcMax) = factionSourceRange[matchedFaction];
-                                int clamped = Math.Clamp(effectiveLevel, srcMin, srcMax);
-                                if (effectiveLevel < srcMin) underleveledNpcs.Add(editorId);
-                                if (effectiveLevel > srcMax) overleveledNpcs.Add(editorId);
-                                baseLevel = MapLevel(clamped, srcMin, srcMax, targetMin, targetMax) + Settings.GlobalOffset;
-                                if (Settings.PrintDebugOutput)
-                                    Console.WriteLine($"  {editorId}: eff {effectiveLevel} in [{srcMin},{srcMax}] -> [{targetMin},{targetMax}] -> {baseLevel}");
-                            }
+                    npcCopy.Configuration.Level = new PcLevelMult { LevelMult = 1f };
+                    npcCopy.Configuration.CalcMinLevel = 1;
+                    short civMax = (short)Rng.Next(10, 51);
+                    npcCopy.Configuration.CalcMaxLevel = civMax;
+                    ++civiliansScaled;
+                    wasChanged = true;
+                    if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: civilian -> PC-scaled cap {civMax}");
+                }
+                // Priority 4: assessment pipeline
+                else if (assessments.TryGetValue(getter.FormKey, out var assessment))
+                {
+                    float score = ComputeScore(assessment);
+                    var (tMin, tMax) = TierSystem.GetRange(assessment.Tier, Settings.WorldMaxLevel);
 
-                            GetRaceModifier(getter, out var add, out var mult);
-                            baseLevel = Math.Round(baseLevel * (decimal)mult) + add;
-                            float bonusPct = GetBonusPercent(editorId);
-                            if (bonusPct > 0f) baseLevel = Math.Round(baseLevel * (decimal)(1f + bonusPct / 100f));
+                    decimal baseLevel = Math.Round(tMin + (decimal)score * (tMax - tMin));
+                    baseLevel += Settings.GlobalOffset;
 
-                            short newLevel = (short)Math.Clamp(baseLevel, 1, short.MaxValue);
-                            if (newLevel > 100) highPoweredNpcs.Add(editorId);
+                    GetRaceModifier(getter, out var rAdd, out var rMult);
+                    baseLevel = Math.Round(baseLevel * (decimal)rMult) + rAdd;
 
-                            ApplyLevel(npcCopy, newLevel);
-                            wasChanged = true;
-                            ++npcsReleveled;
-                        }
-                        else if (Settings.PrintDebugOutput)
-                            Console.WriteLine($"  {editorId}: eff {effectiveLevel} > {targetMax}, skipping relevel.");
-                    }
+                    float bonusPct = GetBonusPercent(editorId);
+                    if (bonusPct > 0f)
+                        baseLevel = Math.Round(baseLevel * (decimal)(1f + bonusPct / 100f));
+
+                    short newLevel = (short)Math.Clamp(baseLevel, 1, short.MaxValue);
+                    if (newLevel > 100) highPoweredNpcs.Add(editorId);
+
+                    if (Settings.PrintDebugOutput)
+                        Console.WriteLine($"  {editorId}: tier {assessment.Tier} ({TierSystem.GetName(assessment.Tier)})" +
+                            $" score={score:F2} range=[{tMin},{tMax}] -> {newLevel}");
+
+                    ApplyLevel(npcCopy, newLevel);
+                    wasChanged = true;
+                    ++pipelineCount;
                 }
 
-                // --- Class rebuild + skill redistribution + perk distribution (all NPCs) ---
+                // All NPCs: class rebuild, skill redistribution, perk distribution
                 wasChanged |= RebalanceClassValues(npcCopy, state, linkCache);
                 wasChanged |= RelevelNPCSkills(npcCopy, linkCache);
                 wasChanged |= DistributeNPCPerks(npcCopy, linkCache, GetVanillaCache(), excludedPerks);
@@ -845,66 +1231,9 @@ namespace SkyrimReleveler
             }
 
             DisableExtraDamagePerks(state);
-            Console.WriteLine($"Done. {npcsReleveled} NPCs releveled, {followersScaled} followers scaled, {npcsProcessed} total processed.");
+
+            Console.WriteLine($"Done. Total={npcsProcessed} | Pipeline={pipelineCount} | Named={namedCount} | Civilians={civiliansScaled} | Followers={followersScaled}");
             PrintWarnings();
-        }
-
-        public static void ApplyLevel(INpc npc, short newLevel)
-        {
-            npc.Configuration.Level = new NpcLevel() { Level = newLevel };
-            npc.Configuration.CalcMinLevel = 1;
-            npc.Configuration.CalcMaxLevel = newLevel;
-        }
-
-        public static IEnumerable<INpcGetter> ResolveStatsRoots(
-            INpcGetter npc, ILinkCache lc, HashSet<FormKey> visited)
-        {
-            if (!visited.Add(npc.FormKey)) yield break;
-            if (!npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Stats)
-                || npc.Template.IsNull
-                || !npc.Template.TryResolve(lc, out var template))
-            { yield return npc; yield break; }
-            foreach (var root in ResolveSpawnRoots(template, lc, visited))
-                yield return root;
-        }
-
-        private static IEnumerable<INpcGetter> ResolveSpawnRoots(
-            INpcSpawnGetter spawn, ILinkCache lc, HashSet<FormKey> visited)
-        {
-            switch (spawn)
-            {
-                case INpcGetter npc:
-                    foreach (var root in ResolveStatsRoots(npc, lc, visited)) yield return root;
-                    break;
-                case ILeveledNpcGetter leveled:
-                    if (!visited.Add(leveled.FormKey)) break;
-                    foreach (var entry in leveled.Entries.EmptyIfNull())
-                    {
-                        if (entry.Data is not { } data) continue;
-                        if (!data.Reference.TryResolve(lc, out var ref2)) continue;
-                        foreach (var root in ResolveSpawnRoots(ref2, lc, visited)) yield return root;
-                    }
-                    break;
-            }
-        }
-
-        public static void PrintWarnings()
-        {
-            if (underleveledNpcs.Count > 0)
-            {
-                Console.WriteLine("Warning: NPCs below faction trimmed minimum, pinned to target minimum:");
-                foreach (var item in underleveledNpcs) Console.WriteLine("  " + item);
-            }
-            if (overleveledNpcs.Count > 0)
-            {
-                Console.WriteLine("Warning: NPCs above faction trimmed maximum, pinned to target maximum:");
-                foreach (var item in overleveledNpcs) Console.WriteLine("  " + item);
-            }
-            if (highPoweredNpcs.Count > 0)
-            {
-                Console.WriteLine("Warning: NPCs assigned level > 100:");
-                foreach (var item in highPoweredNpcs) Console.WriteLine("  " + item);
-            }
         }
     }
 }
