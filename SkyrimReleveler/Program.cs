@@ -556,6 +556,13 @@ namespace SkyrimReleveler
             if (state.ExtraSettingsDataPath is null)
             { Console.Error.WriteLine("ERROR: ExtraSettingsDataPath is null."); return; }
 
+            // TEMPORARY: dump all race EditorIDs from the full load order, then exit
+            Console.WriteLine("=== RACE DUMP START ===");
+            foreach (var race in state.LoadOrder.PriorityOrder.Race().WinningOverrides())
+                Console.WriteLine(race.EditorID ?? "(null)");
+            Console.WriteLine("=== RACE DUMP END ===");
+            return;
+
             // Load enemy rules
             var rulesPath = Path.Combine(state.ExtraSettingsDataPath, "enemy_rules.json");
             if (!File.Exists(rulesPath)) { Console.Error.WriteLine($"ERROR: Missing {rulesPath}"); return; }
