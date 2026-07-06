@@ -962,43 +962,78 @@ namespace SkyrimReleveler
             }
 
             // -----------------------------------------------------------------------
-            // Pre-pass: classify every eligible NPC and collect peer data
+            // Pre-pass A: first sweep — collect faction membership counts and
+            // per-NPC data so we can pick the LARGEST hostile faction per NPC.
             // -----------------------------------------------------------------------
-            // assessments[formKey] = NpcAssessment
-            var assessments = new Dictionary<FormKey, NpcAssessment>();
-            // faction peers: factionEditorId -> list of formKeys in that faction
-            var factionPeers = new Dictionary<string, List<FormKey>>(StringComparer.OrdinalIgnoreCase);
-            // race peers: raceFormKey -> list of formKeys with that race
-            var racePeers   = new Dictionary<FormKey, List<FormKey>>();
-            // tier members: tier -> list of formKeys
-            var tierMembers = new Dictionary<int, List<FormKey>>();
+
+            // Skip-condition helper used in both passes
+            bool ShouldSkipPrePass(INpcGetter g, string edId) =>
+                npcsToIgnore.Contains(g) ||
+                g.Configuration.Flags.HasFlag(NpcConfiguration.Flag.IsCharGenFacePreset) ||
+                g.HasKeyword(Skyrim.Keyword.PlayerKeyword) ||
+                IsExcluded(edId) ||
+                IsFollower(g) ||
+                FindNamedLevel(edId) is not null ||
+                IsCivilian(g, linkCache);
+
+            // factionMemberCount[factionEditorId] = total NPC count across load order
+            var factionMemberCount = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            // Non-hostile faction EditorID substrings to skip during faction selection
+            static bool IsNonHostileFaction(string facId) =>
+                facId.Contains("Follower",   StringComparison.OrdinalIgnoreCase) ||
+                facId.Contains("Vendor",     StringComparison.OrdinalIgnoreCase) ||
+                facId.Contains("Player",     StringComparison.OrdinalIgnoreCase) ||
+                facId.Contains("Crime",      StringComparison.OrdinalIgnoreCase) ||
+                facId.Contains("Merchant",   StringComparison.OrdinalIgnoreCase) ||
+                facId.Contains("Hireling",   StringComparison.OrdinalIgnoreCase) ||
+                facId.Contains("Potential",  StringComparison.OrdinalIgnoreCase) ||
+                facId.Contains("Steward",    StringComparison.OrdinalIgnoreCase);
 
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
-                if (npcsToIgnore.Contains(getter)) continue;
-                if (getter.EditorID is not { } edId) continue;
-                if (getter.Configuration.Flags.HasFlag(NpcConfiguration.Flag.IsCharGenFacePreset) ||
-                    getter.HasKeyword(Skyrim.Keyword.PlayerKeyword)) continue;
-                if (IsExcluded(edId)) continue;
-                if (IsFollower(getter)) continue;
-                if (FindNamedLevel(edId) is not null) continue;
-                if (IsCivilian(getter, linkCache)) continue;
-
-                int? effLevel = GetEffectiveLevel(getter);
-
-                int tier = ClassifyNpc(getter, linkCache);
-
-                // First hostile faction for peer grouping
-                string? factionKey = null;
+                if (getter.EditorID is not { } edId0) continue;
+                if (ShouldSkipPrePass(getter, edId0)) continue;
                 foreach (var rankEntry in getter.Factions)
                 {
                     if (!rankEntry.Faction.TryResolve(linkCache, out var fac) || fac.EditorID is null) continue;
-                    // Skip obviously non-hostile factions (follower, crime, vendor, player)
-                    if (fac.EditorID.Contains("Follower", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (fac.EditorID.Contains("Vendor",   StringComparison.OrdinalIgnoreCase)) continue;
-                    if (fac.EditorID.Contains("Player",   StringComparison.OrdinalIgnoreCase)) continue;
-                    factionKey = fac.EditorID;
-                    break;
+                    if (IsNonHostileFaction(fac.EditorID)) continue;
+                    if (!factionMemberCount.TryGetValue(fac.EditorID, out var cnt))
+                        factionMemberCount[fac.EditorID] = 1;
+                    else
+                        factionMemberCount[fac.EditorID] = cnt + 1;
+                }
+            }
+
+            // -----------------------------------------------------------------------
+            // Pre-pass B: full assessment — classify each NPC, pick largest faction
+            // -----------------------------------------------------------------------
+            // assessments[formKey] = NpcAssessment
+            var assessments = new Dictionary<FormKey, NpcAssessment>();
+            // factionEditorId -> effective levels of all members (for source range)
+            var factionEffLevels = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+            // race peers: raceFormKey -> effective levels
+            var raceEffLevels = new Dictionary<FormKey, List<int>>();
+            // tier members for no-faction fallback
+            var tierEffLevels = new Dictionary<int, List<int>>();
+
+            foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
+            {
+                if (getter.EditorID is not { } edId) continue;
+                if (ShouldSkipPrePass(getter, edId)) continue;
+
+                int? effLevel = GetEffectiveLevel(getter);
+                int tier = ClassifyNpc(getter, linkCache);
+
+                // Pick the LARGEST hostile faction this NPC belongs to
+                string? bestFaction = null;
+                int bestCount = 0;
+                foreach (var rankEntry in getter.Factions)
+                {
+                    if (!rankEntry.Faction.TryResolve(linkCache, out var fac) || fac.EditorID is null) continue;
+                    if (IsNonHostileFaction(fac.EditorID)) continue;
+                    int cnt = factionMemberCount.TryGetValue(fac.EditorID, out var c) ? c : 0;
+                    if (cnt > bestCount) { bestCount = cnt; bestFaction = fac.EditorID; }
                 }
 
                 FormKey raceFormKey = getter.Race.FormKey;
@@ -1007,138 +1042,103 @@ namespace SkyrimReleveler
 
                 var assessment = new NpcAssessment
                 {
-                    FormKey       = getter.FormKey,
-                    EditorId      = edId,
-                    Tier          = tier,
+                    FormKey        = getter.FormKey,
+                    EditorId       = edId,
+                    Tier           = tier,
                     EffectiveLevel = effLevel,
-                    CalcMax       = calcMax,
+                    CalcMax        = calcMax,
                     EquipmentScore = equipScore,
-                    FactionKey    = factionKey,
-                    RaceFormKey   = raceFormKey,
+                    FactionKey     = bestFaction,
+                    RaceFormKey    = raceFormKey,
                 };
                 assessments[getter.FormKey] = assessment;
 
-                // Register in peer indices
-                if (factionKey is not null)
+                // Accumulate effective levels into peer lists
+                if (effLevel.HasValue && effLevel.Value > 0)
                 {
-                    if (!factionPeers.TryGetValue(factionKey, out var fl))
-                        factionPeers[factionKey] = fl = new List<FormKey>();
-                    fl.Add(getter.FormKey);
+                    if (bestFaction is not null)
+                    {
+                        if (!factionEffLevels.TryGetValue(bestFaction, out var fl))
+                            factionEffLevels[bestFaction] = fl = new List<int>();
+                        fl.Add(effLevel.Value);
+                    }
+
+                    if (!raceEffLevels.TryGetValue(raceFormKey, out var rl))
+                        raceEffLevels[raceFormKey] = rl = new List<int>();
+                    rl.Add(effLevel.Value);
+
+                    if (!tierEffLevels.TryGetValue(tier, out var tl))
+                        tierEffLevels[tier] = tl = new List<int>();
+                    tl.Add(effLevel.Value);
                 }
-
-                if (!racePeers.TryGetValue(raceFormKey, out var rl))
-                    racePeers[raceFormKey] = rl = new List<FormKey>();
-                rl.Add(getter.FormKey);
-
-                if (!tierMembers.TryGetValue(tier, out var tl))
-                    tierMembers[tier] = tl = new List<FormKey>();
-                tl.Add(getter.FormKey);
             }
 
-            Console.WriteLine($"Pre-pass complete. {assessments.Count} NPCs assessed across {tierMembers.Count} tiers.");
+            // Sort all level lists for trimmed-range calculation
+            foreach (var lst in factionEffLevels.Values) lst.Sort();
+            foreach (var lst in raceEffLevels.Values)    lst.Sort();
+            foreach (var lst in tierEffLevels.Values)    lst.Sort();
+
+            float cutoff = Settings.OutlierPercentileCutoff;
+            int   minPeers = Settings.AutoFactionMinPeers;
+
+            // Pre-compute trimmed source ranges for each faction
+            var factionSourceRange = new Dictionary<string, (int Min, int Max)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (fk, lvls) in factionEffLevels)
+                if (lvls.Count >= minPeers)
+                    factionSourceRange[fk] = GetTrimmedRange(lvls, cutoff);
+
+            var raceSourceRange = new Dictionary<FormKey, (int Min, int Max)>();
+            foreach (var (rk, lvls) in raceEffLevels)
+                if (lvls.Count >= 1)
+                    raceSourceRange[rk] = GetTrimmedRange(lvls, cutoff);
+
+            var tierSourceRange = new Dictionary<int, (int Min, int Max)>();
+            foreach (var (tk, lvls) in tierEffLevels)
+                tierSourceRange[tk] = GetTrimmedRange(lvls, cutoff);
+
+            Console.WriteLine($"Pre-pass complete. {assessments.Count} NPCs | {factionSourceRange.Count} factions with ranges.");
 
             // -----------------------------------------------------------------------
-            // Compute percentile helpers
+            // Level computation — faction-first, then race, then tier-global
             // -----------------------------------------------------------------------
-            // Returns a 0-1 percentile rank of value within a sorted list of values.
-            static float Percentile(int value, List<int> sorted)
-            {
-                if (sorted.Count == 0) return 0.5f;
-                if (sorted.Count == 1) return 0.5f;
-                int lo = sorted.Count - 1;
-                for (int i = 0; i < sorted.Count; i++)
-                    if (sorted[i] >= value) { lo = i; break; }
-                return (float)lo / (sorted.Count - 1);
-            }
-
-            // Pre-sort peer level lists for fast percentile lookups
-            var factionEffLevels  = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-            var factionCalcMaxes  = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-            var raceEffLevels     = new Dictionary<FormKey, List<int>>();
-            var raceCalcMaxes     = new Dictionary<FormKey, List<int>>();
-            var tierEffLevels     = new Dictionary<int, List<int>>();
-            var tierCalcMaxes     = new Dictionary<int, List<int>>();
-
-            foreach (var (fk, members) in factionPeers)
-            {
-                factionEffLevels[fk] = members
-                    .Select(m => assessments[m].EffectiveLevel ?? 0)
-                    .Where(v => v > 0).OrderBy(v => v).ToList();
-                factionCalcMaxes[fk] = members
-                    .Select(m => assessments[m].CalcMax)
-                    .Where(v => v > 0).OrderBy(v => v).ToList();
-            }
-            foreach (var (rk, members) in racePeers)
-            {
-                raceEffLevels[rk] = members
-                    .Select(m => assessments[m].EffectiveLevel ?? 0)
-                    .Where(v => v > 0).OrderBy(v => v).ToList();
-                raceCalcMaxes[rk] = members
-                    .Select(m => assessments[m].CalcMax)
-                    .Where(v => v > 0).OrderBy(v => v).ToList();
-            }
-            foreach (var (tk, members) in tierMembers)
-            {
-                tierEffLevels[tk] = members
-                    .Select(m => assessments[m].EffectiveLevel ?? 0)
-                    .Where(v => v > 0).OrderBy(v => v).ToList();
-                tierCalcMaxes[tk] = members
-                    .Select(m => assessments[m].CalcMax)
-                    .Where(v => v > 0).OrderBy(v => v).ToList();
-            }
-
-            int minPeers = Settings.AutoFactionMinPeers;
-
-            float ComputeScore(NpcAssessment a)
+            short ComputeLevel(NpcAssessment a)
             {
                 int tier = a.Tier;
-                string? fk = a.FactionKey;
-                FormKey rk = a.RaceFormKey;
+                var (tMin, tMax) = TierSystem.GetRange(tier, Settings.WorldMaxLevel);
+                int effLvl = a.EffectiveLevel ?? 0;
 
-                // Select peer group for eff level and calcMax percentiles
-                List<int> effList, calcList;
-                string peerType;
+                decimal baseLevel;
+                string mode;
 
-                bool hasFactionPeers = fk is not null
-                    && factionPeers.TryGetValue(fk, out var fp) && fp.Count >= minPeers
-                    && factionEffLevels.TryGetValue(fk, out var feList) && feList.Count > 0;
-
-                if (hasFactionPeers)
+                // PATH 1: NPC has a large enough faction — use faction source range mapped to tier range
+                if (a.FactionKey is not null && factionSourceRange.TryGetValue(a.FactionKey, out var fsr))
                 {
-                    effList  = factionEffLevels[fk!];
-                    calcList = factionCalcMaxes.TryGetValue(fk!, out var fcl) ? fcl : new List<int>();
-                    peerType = "faction";
+                    int clamped = Math.Clamp(effLvl > 0 ? effLvl : fsr.Min, fsr.Min, fsr.Max);
+                    baseLevel = effLvl > 0
+                        ? MapLevel(clamped, fsr.Min, fsr.Max, tMin, tMax)
+                        : Math.Round((tMin + tMax) / 2m);
+                    mode = $"faction({a.FactionKey}) src=[{fsr.Min},{fsr.Max}]";
                 }
-                else if (raceEffLevels.TryGetValue(rk, out var reList) && reList.Count > 0)
+                // PATH 2: No qualifying faction — use race source range
+                else if (raceSourceRange.TryGetValue(a.RaceFormKey, out var rsr))
                 {
-                    effList  = reList;
-                    calcList = raceCalcMaxes.TryGetValue(rk, out var rcl) ? rcl : new List<int>();
-                    peerType = "race";
+                    int clamped = Math.Clamp(effLvl > 0 ? effLvl : rsr.Min, rsr.Min, rsr.Max);
+                    baseLevel = effLvl > 0
+                        ? MapLevel(clamped, rsr.Min, rsr.Max, tMin, tMax)
+                        : Math.Round((tMin + tMax) / 2m);
+                    mode = $"race src=[{rsr.Min},{rsr.Max}]";
                 }
+                // PATH 3: No faction, no race peers — use equipment score within tier range
                 else
                 {
-                    effList  = tierEffLevels.TryGetValue(tier, out var teList) ? teList : new List<int>();
-                    calcList = tierCalcMaxes.TryGetValue(tier, out var tcl)    ? tcl    : new List<int>();
-                    peerType = "tier-global";
+                    baseLevel = Math.Round(tMin + (decimal)a.EquipmentScore * (tMax - tMin));
+                    mode = "equipment-score";
                 }
 
                 if (Settings.PrintDebugOutput)
-                    Console.WriteLine($"    {a.EditorId}: tier {tier} ({TierSystem.GetName(tier)}), peers={peerType}");
+                    Console.WriteLine($"  {a.EditorId}: tier {tier} ({TierSystem.GetName(tier)}) [{tMin},{tMax}] via {mode} -> base {baseLevel}");
 
-                float effPct    = a.EffectiveLevel.HasValue && effList.Count > 0
-                    ? Percentile(a.EffectiveLevel.Value, effList) : -1f;
-                float calcPct   = a.CalcMax > 0 && calcList.Count > 0
-                    ? Percentile(a.CalcMax, calcList) : -1f;
-                float equipPct  = a.EquipmentScore; // already 0-1
-
-                // Weighted sum with normalization for missing signals
-                float w1 = 0.4f, w2 = 0.3f, w3 = 0.3f;
-                float totalW = 0f, total = 0f;
-                if (effPct   >= 0) { total += effPct   * w1; totalW += w1; }
-                if (equipPct >= 0) { total += equipPct * w2; totalW += w2; }
-                if (calcPct  >= 0) { total += calcPct  * w3; totalW += w3; }
-
-                return totalW > 0 ? total / totalW : 0.5f;
+                return (short)Math.Clamp(baseLevel, tMin, tMax);
             }
 
             // -----------------------------------------------------------------------
@@ -1193,25 +1193,22 @@ namespace SkyrimReleveler
                 // Priority 4: assessment pipeline
                 else if (assessments.TryGetValue(getter.FormKey, out var assessment))
                 {
-                    float score = ComputeScore(assessment);
-                    var (tMin, tMax) = TierSystem.GetRange(assessment.Tier, Settings.WorldMaxLevel);
+                    short baseLevel = ComputeLevel(assessment);
 
-                    decimal baseLevel = Math.Round(tMin + (decimal)score * (tMax - tMin));
-                    baseLevel += Settings.GlobalOffset;
-
+                    // Post-score adjustments
+                    decimal adjusted = baseLevel + Settings.GlobalOffset;
                     GetRaceModifier(getter, out var rAdd, out var rMult);
-                    baseLevel = Math.Round(baseLevel * (decimal)rMult) + rAdd;
+                    adjusted = Math.Round(adjusted * (decimal)rMult) + rAdd;
 
                     float bonusPct = GetBonusPercent(editorId);
                     if (bonusPct > 0f)
-                        baseLevel = Math.Round(baseLevel * (decimal)(1f + bonusPct / 100f));
+                        adjusted = Math.Round(adjusted * (decimal)(1f + bonusPct / 100f));
 
-                    short newLevel = (short)Math.Clamp(baseLevel, 1, short.MaxValue);
+                    short newLevel = (short)Math.Clamp(adjusted, 1, short.MaxValue);
                     if (newLevel > 100) highPoweredNpcs.Add(editorId);
 
                     if (Settings.PrintDebugOutput)
-                        Console.WriteLine($"  {editorId}: tier {assessment.Tier} ({TierSystem.GetName(assessment.Tier)})" +
-                            $" score={score:F2} range=[{tMin},{tMax}] -> {newLevel}");
+                        Console.WriteLine($"    -> final {newLevel} (offset={Settings.GlobalOffset}, raceMult={rMult}, raceAdd={rAdd}, bonus={bonusPct}%)");
 
                     ApplyLevel(npcCopy, newLevel);
                     wasChanged = true;
