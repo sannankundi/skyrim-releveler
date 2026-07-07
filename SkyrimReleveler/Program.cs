@@ -286,13 +286,17 @@ namespace SkyrimReleveler
                 return ClassifyHumanoid(raceEditorId);
 
             if (race.HasKeyword(Skyrim.Keyword.ActorTypeAnimal))
-                return 14;
+            {
+                // Some "animal" races are actually dangerous monsters —
+                // check race EditorID before defaulting to vermin tier
+                return ClassifyAnimalOrCreature(raceEditorId, isForcedAnimal: true);
+            }
 
             if (race.HasKeyword(Skyrim.Keyword.ActorTypeCreature))
-                return ClassifyCreature(raceEditorId);
+                return ClassifyAnimalOrCreature(raceEditorId, isForcedAnimal: false);
 
-            // No keyword matched — fall back to humanoid
-            return 12;
+            // No keyword matched — try race EditorID as last resort before humanoid default
+            return ClassifyAnimalOrCreature(raceEditorId, isForcedAnimal: false);
         }
 
         private static int ClassifyDragon(string? raceId)
@@ -352,23 +356,43 @@ namespace SkyrimReleveler
             return 12;
         }
 
-        private static int ClassifyCreature(string? raceId)
+        private static int ClassifyAnimalOrCreature(string? raceId, bool isForcedAnimal)
         {
-            if (raceId is null) return 13;
-            // Tier 7 — large dangerous monsters
+            if (raceId is null) return isForcedAnimal ? 14 : 13;
+
+            // Tier 7 — large dangerous monsters (override animal flag if present)
             if (ContainsAny(raceId, "Mammoth", "Giant", "Troll", "Hagrave", "Spriggan",
                                     "Chaurus", "Falmer", "Lurker", "Dreugh",
-                                    "Griffon", "Gorgon", "Minотaur", "Minotaur",
+                                    "Griffon", "Gorgon", "Minotaur",
                                     "Ogre", "CaveWorm", "Wendigo", "Elytra", "Scalon",
                                     "FleshGuardian", "BirdMan", "HalfDragon"))
                 return 7;
+
+            // Tier 10 — Spriggan/Hagrave/Troll/Wispmother range (if not already caught above)
+            if (ContainsAny(raceId, "Wispmother", "WillOWisp", "WillOtheWisp"))
+                return 10;
+
             // Tier 11 — dangerous wildlife
             if (ContainsAny(raceId, "Bear", "Sabrecat", "Wolf", "Spider", "DeathHound",
-                                    "Gargoyle", "IceWraith", "Wispmother", "Wisp",
+                                    "Gargoyle", "IceWraith", "Wisp",
                                     "Raptor", "Panther", "Lion", "Hyena", "Tiger",
                                     "DeathWeaver", "NightmareHound", "SpiritHound",
-                                    "FrostHound", "Nekker", "Wendigo"))
+                                    "FrostHound", "Nekker", "Wendigo",
+                                    "Horker", "Slaughterfish", "Mudcrab",
+                                    "Frostbite", "Skeever", "Riekling"))
                 return 11;
+
+            // Pure vermin / passive animals
+            if (ContainsAny(raceId, "Skeever", "Rat", "Dog", "Horse", "Goat", "Sheep",
+                                    "Cow", "Chicken", "Rabbit", "Deer", "Elk",
+                                    "Fox", "Hare", "Pig", "Goose", "Crab",
+                                    "Reindeer", "Netch", "Boar"))
+                return 14;
+
+            // If it was explicitly animal-flagged and no pattern matched, it's passive
+            if (isForcedAnimal) return 14;
+
+            // Generic creature with no match
             return 13;
         }
 
@@ -1070,7 +1094,16 @@ namespace SkyrimReleveler
                 facId.Contains("Merchant",   StringComparison.OrdinalIgnoreCase) ||
                 facId.Contains("Hireling",   StringComparison.OrdinalIgnoreCase) ||
                 facId.Contains("Potential",  StringComparison.OrdinalIgnoreCase) ||
-                facId.Contains("Steward",    StringComparison.OrdinalIgnoreCase);
+                facId.Contains("Steward",    StringComparison.OrdinalIgnoreCase) ||
+                // Generic creature/animal catch-all factions that span too many tiers
+                // to be useful as peer groups — let race-based comparison handle these
+                facId.Equals("CreatureFaction",      StringComparison.OrdinalIgnoreCase) ||
+                facId.Equals("AnimalFaction",        StringComparison.OrdinalIgnoreCase) ||
+                facId.Equals("PreyFaction",          StringComparison.OrdinalIgnoreCase) ||
+                facId.Equals("PredatorFaction",      StringComparison.OrdinalIgnoreCase) ||
+                facId.Equals("WildlifeFaction",      StringComparison.OrdinalIgnoreCase) ||
+                // Any faction named just "Creature" + something generic
+                (facId.StartsWith("Creature", StringComparison.OrdinalIgnoreCase) && facId.Length < 20);
 
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
