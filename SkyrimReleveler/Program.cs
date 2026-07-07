@@ -300,6 +300,8 @@ namespace SkyrimReleveler
             if (raceId is null) return 2;
             if (raceId.Equals("AlduinRace", StringComparison.OrdinalIgnoreCase)) return 1;
             if (ContainsAny(raceId, "DragonPriest")) return 3;
+            // Half-dragon and dragoman variants — still dragon tier
+            if (ContainsAny(raceId, "HalfDragon", "Dragoman", "WereDrake")) return 2;
             return 2;
         }
 
@@ -307,10 +309,13 @@ namespace SkyrimReleveler
         {
             if (raceId is null) return 4;
             // High daedra tier
-            if (ContainsAny(raceId, "Dremora", "Xivilai", "Xivkyn", "GoldenSaint", "DarkSeducer"))
+            if (ContainsAny(raceId, "Dremora", "Xivilai", "Xivkyn", "GoldenSaint", "DarkSeducer",
+                                    "Auroran", "KnightOfOrder", "OrderKnight", "OrderPriest",
+                                    "Hunger", "FleshAtronach", "IronAtronach", "EarthAtronach"))
                 return 4;
             // Mid daedra tier
-            if (ContainsAny(raceId, "Scamp", "Clannfear", "Daedroth"))
+            if (ContainsAny(raceId, "Scamp", "Clannfear", "Daedroth", "Grummite", "Balliwog",
+                                    "Banekin", "SpiderDaedra", "Watcher"))
                 return 7;
             return 4; // default Daedra = high
         }
@@ -318,33 +323,51 @@ namespace SkyrimReleveler
         private static int ClassifyUndead(string? raceId)
         {
             if (raceId is null) return 9;
-            if (ContainsAny(raceId, "VampireLord", "VampireBeast", "SoulCairn")) return 5;
-            if (ContainsAny(raceId, "Lich")) return 3;
-            // Everything else: draugr, skeleton, spirit, wraith, etc.
+            if (ContainsAny(raceId, "VampireLord", "VampireBeast", "SoulCairn",
+                                    "IdealMaster", "VampireBones")) return 5;
+            if (ContainsAny(raceId, "Lich", "DragonPriest", "BoneLord",
+                                    "EbonyPriest", "WraithKnight", "WraithLord",
+                                    "WraithWitch", "WraithArchwitch")) return 3;
+            // Mid undead — named elite variants
+            if (ContainsAny(raceId, "HulkingDraugr", "DraugrJyrik", "DraugrGiant",
+                                    "SkeletonGoliath", "BoneColossus", "BoneHulk",
+                                    "ShamblesLord", "BoneLord")) return 6;
+            // Everything else: draugr, skeleton, ghost, wraith, wight, etc.
             return 9;
         }
 
         private static int ClassifyConstruct(string? raceId)
         {
             if (raceId is null) return 9;
-            if (ContainsAny(raceId, "Centurion", "Forgemaster", "Colossus", "Golem")) return 6;
+            if (ContainsAny(raceId, "Centurion", "Forgemaster", "Colossus", "Golem",
+                                    "Driller", "Pretorian", "GoldBoneCenturion",
+                                    "DweKnight", "DweQueen", "DweSoldier")) return 6;
             return 9;
         }
 
         private static int ClassifyHumanoid(string? raceId)
         {
             if (raceId is null) return 12;
-            if (ContainsAny(raceId, "SnowElf", "Falmer")) return 7;
+            if (ContainsAny(raceId, "SnowElf", "Falmer", "Nerevarine", "Chimera")) return 7;
             return 12;
         }
 
         private static int ClassifyCreature(string? raceId)
         {
             if (raceId is null) return 13;
-            if (ContainsAny(raceId, "Mammoth", "Giant", "Troll", "Hagrave", "Spriggan", "Chaurus", "Falmer"))
+            // Tier 7 — large dangerous monsters
+            if (ContainsAny(raceId, "Mammoth", "Giant", "Troll", "Hagrave", "Spriggan",
+                                    "Chaurus", "Falmer", "Lurker", "Dreugh",
+                                    "Griffon", "Gorgon", "Minотaur", "Minotaur",
+                                    "Ogre", "CaveWorm", "Wendigo", "Elytra", "Scalon",
+                                    "FleshGuardian", "BirdMan", "HalfDragon"))
                 return 7;
+            // Tier 11 — dangerous wildlife
             if (ContainsAny(raceId, "Bear", "Sabrecat", "Wolf", "Spider", "DeathHound",
-                                    "Gargoyle", "IceWraith", "Wispmother", "Wispmother", "Wisp"))
+                                    "Gargoyle", "IceWraith", "Wispmother", "Wisp",
+                                    "Raptor", "Panther", "Lion", "Hyena", "Tiger",
+                                    "DeathWeaver", "NightmareHound", "SpiritHound",
+                                    "FrostHound", "Nekker", "Wendigo"))
                 return 11;
             return 13;
         }
@@ -353,12 +376,15 @@ namespace SkyrimReleveler
         {
             // Only upgrades (lower tier number = more powerful). Never downgrades.
             // Cosmic override
-            if (ContainsAny(editorId, "MolagBal", "Jyggalag", "Shoggoth", "DaedricPrince") ||
-                ContainsAny(name,     "MolagBal", "Jyggalag", "Shoggoth", "Daedric Prince"))
+            if (ContainsAny(editorId, "MolagBal", "Jyggalag", "Shoggoth", "DaedricPrince",
+                                      "MolagInner", "ShoggothMother") ||
+                ContainsAny(name,     "Molag Bal", "Jyggalag", "Shoggoth", "Daedric Prince"))
                 return Math.Min(currentTier, 0);
 
             // Dragon priest / lich elevation
-            if (ContainsAny(editorId, "DragonPriest", "Lich", "Necromancer") ||
+            if (ContainsAny(editorId, "DragonPriest", "Lich", "Necromancer",
+                                      "WraithLord", "WraithKnight", "WraithArchwitch",
+                                      "NecroLich", "AyleidLich", "BoneLord") ||
                 ContainsAny(name,     "Dragon Priest", "Lich", "Necromancer"))
                 return Math.Min(currentTier, 3);
 
@@ -369,12 +395,14 @@ namespace SkyrimReleveler
                 return Math.Min(currentTier, 8);
 
             // Undead elevation
-            if (ContainsAny(editorId, "Zombie", "Undead", "Ghost", "Wraith", "Shade") ||
+            if (ContainsAny(editorId, "Zombie", "Undead", "Ghost", "Wraith", "Shade",
+                                      "Draugr", "Skeleton", "Wight", "Revenant", "Banshee") ||
                 ContainsAny(name,     "Zombie", "Undead", "Ghost", "Wraith", "Shade"))
                 return Math.Min(currentTier, 9);
 
             // Construct elevation
-            if (ContainsAny(editorId, "Golem", "Construct", "Automaton", "Centurion") ||
+            if (ContainsAny(editorId, "Golem", "Construct", "Automaton", "Centurion",
+                                      "Dwemerbot", "Droidmine") ||
                 ContainsAny(name,     "Golem", "Construct", "Automaton", "Centurion"))
                 return Math.Min(currentTier, 6);
 
