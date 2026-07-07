@@ -932,6 +932,16 @@ namespace SkyrimReleveler
 
             var linkCache = state.LoadOrder.PriorityOrder.ToImmutableLinkCache();
 
+            // Race dump — toggle DumpRaces in settings to inspect new races after adding mods
+            if (Settings.DumpRaces || Settings.PrintDebugOutput)
+            {
+                Console.WriteLine("=== RACE DUMP ===");
+                foreach (var race in state.LoadOrder.PriorityOrder.Race().WinningOverrides())
+                    Console.WriteLine($"  {race.EditorID ?? "(null)"}");
+                Console.WriteLine("=== END RACE DUMP ===");
+                Console.WriteLine();
+            }
+
             // -----------------------------------------------------------------------
             // Helper closures
             // -----------------------------------------------------------------------
