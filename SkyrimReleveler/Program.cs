@@ -1330,10 +1330,19 @@ namespace SkyrimReleveler
                     GetRaceModifier(getter, out var rAdd, out var rMult);
                     short fixedLevel = (short)Math.Clamp(
                         Math.Round(namedLevel * rMult) + rAdd + Settings.GlobalOffset, 1, short.MaxValue);
-                    if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
-                    ApplyLevel(npcCopy, fixedLevel);
-                    wasChanged = true;
-                    ++namedCount;
+                    short existingMax2 = getter.Configuration.CalcMaxLevel;
+                    if (existingMax2 > 0 && existingMax2 > fixedLevel)
+                    {
+                        if (Settings.PrintDebugOutput)
+                            Console.WriteLine($"  {editorId}: named would set {fixedLevel} but existing CalcMaxLevel={existingMax2} is higher — preserved");
+                    }
+                    else
+                    {
+                        if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
+                        ApplyLevel(npcCopy, fixedLevel);
+                        wasChanged = true;
+                        ++namedCount;
+                    }
                 }
                 // Priority 3: civilians (class-based) and named characters (no hostile faction)
                 else if (IsCivilian(getter, linkCache, factionMemberCount,
@@ -1362,14 +1371,25 @@ namespace SkyrimReleveler
                         adjusted = Math.Round(adjusted * (decimal)(1f + bonusPct / 100f));
 
                     short newLevel = (short)Math.Clamp(adjusted, 1, short.MaxValue);
-                    if (newLevel > 100) highPoweredNpcs.Add(editorId);
 
-                    if (Settings.PrintDebugOutput)
-                        Console.WriteLine($"    -> final {newLevel} (offset={Settings.GlobalOffset}, raceMult={rMult}, raceAdd={rAdd}, bonus={bonusPct}%)");
-
-                    ApplyLevel(npcCopy, newLevel);
-                    wasChanged = true;
-                    ++pipelineCount;
+                    // Preserve higher mod-assigned CalcMaxLevel
+                    short existingMax = getter.Configuration.CalcMaxLevel;
+                    if (existingMax > 0 && existingMax > newLevel)
+                    {
+                        if (Settings.PrintDebugOutput)
+                            Console.WriteLine($"  {editorId}: pipeline would set {newLevel} but existing CalcMaxLevel={existingMax} is higher — preserved");
+                        // Don't call ApplyLevel; still count as processed for stats
+                        ++pipelineCount;
+                    }
+                    else
+                    {
+                        if (newLevel > 100) highPoweredNpcs.Add(editorId);
+                        if (Settings.PrintDebugOutput)
+                            Console.WriteLine($"    -> final {newLevel} (offset={Settings.GlobalOffset}, raceMult={rMult}, raceAdd={rAdd}, bonus={bonusPct}%)");
+                        ApplyLevel(npcCopy, newLevel);
+                        wasChanged = true;
+                        ++pipelineCount;
+                    }
                 }
 
                 // All NPCs: class rebuild, skill redistribution, perk distribution
