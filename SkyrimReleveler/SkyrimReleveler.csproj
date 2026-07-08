@@ -13,4 +13,9 @@
     <PackageReference Include="Mutagen.Bethesda.FormKeys.SkyrimSE" Version="3.4.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="InternalData\**\*">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

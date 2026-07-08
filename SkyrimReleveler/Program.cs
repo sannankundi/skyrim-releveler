@@ -942,29 +942,19 @@ namespace SkyrimReleveler
             { Console.Error.WriteLine("ERROR: ExtraSettingsDataPath is null."); return; }
 
             // -----------------------------------------------------------------------
-            // Optional: sync data JSON files from the project source folder
+            // Seed default data files from InternalData on first run (or if missing)
             // -----------------------------------------------------------------------
-            if (Settings.SyncDataFiles)
+            Directory.CreateDirectory(state.ExtraSettingsDataPath);
+            if (state.InternalDataPath is not null)
             {
-                string src = Settings.DataSourcePath?.Trim() ?? "";
-                if (string.IsNullOrEmpty(src))
+                foreach (var src in Directory.EnumerateFiles(state.InternalDataPath, "*.json", SearchOption.TopDirectoryOnly))
                 {
-                    Console.WriteLine("  SyncDataFiles is enabled but DataSourcePath is not set — skipping sync.");
-                }
-                else if (!Directory.Exists(src))
-                {
-                    Console.WriteLine($"  SyncDataFiles is enabled but DataSourcePath does not exist: {src} — skipping sync.");
-                }
-                else
-                {
-                    int copied = 0;
-                    foreach (var file in Directory.EnumerateFiles(src, "*.json", SearchOption.TopDirectoryOnly))
+                    string dest = Path.Combine(state.ExtraSettingsDataPath, Path.GetFileName(src));
+                    if (!File.Exists(dest))
                     {
-                        string dest = Path.Combine(state.ExtraSettingsDataPath, Path.GetFileName(file));
-                        File.Copy(file, dest, overwrite: true);
-                        ++copied;
+                        File.Copy(src, dest);
+                        Console.WriteLine($"  Seeded default data file: {Path.GetFileName(src)}");
                     }
-                    Console.WriteLine($"  SyncDataFiles: copied {copied} JSON file(s) from {src}");
                 }
             }
 

@@ -1,0 +1,7 @@
+{
+  "_comment": "NPCs whose EditorID contains any Key (and none of ForbiddenKeys) are skipped entirely.",
+  "Keys": [
+    "_noASIS"
+  ],
+  "ForbiddenKeys": []
+}
