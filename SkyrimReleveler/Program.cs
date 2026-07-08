@@ -941,6 +941,33 @@ namespace SkyrimReleveler
             if (state.ExtraSettingsDataPath is null)
             { Console.Error.WriteLine("ERROR: ExtraSettingsDataPath is null."); return; }
 
+            // -----------------------------------------------------------------------
+            // Optional: sync data JSON files from the project source folder
+            // -----------------------------------------------------------------------
+            if (Settings.SyncDataFiles)
+            {
+                string src = Settings.DataSourcePath?.Trim() ?? "";
+                if (string.IsNullOrEmpty(src))
+                {
+                    Console.WriteLine("  SyncDataFiles is enabled but DataSourcePath is not set — skipping sync.");
+                }
+                else if (!Directory.Exists(src))
+                {
+                    Console.WriteLine($"  SyncDataFiles is enabled but DataSourcePath does not exist: {src} — skipping sync.");
+                }
+                else
+                {
+                    int copied = 0;
+                    foreach (var file in Directory.EnumerateFiles(src, "*.json", SearchOption.TopDirectoryOnly))
+                    {
+                        string dest = Path.Combine(state.ExtraSettingsDataPath, Path.GetFileName(file));
+                        File.Copy(file, dest, overwrite: true);
+                        ++copied;
+                    }
+                    Console.WriteLine($"  SyncDataFiles: copied {copied} JSON file(s) from {src}");
+                }
+            }
+
             // Load named NPC overrides
             var namedPath = Path.Combine(state.ExtraSettingsDataPath, "named_npcs.json");
             if (!File.Exists(namedPath)) { Console.Error.WriteLine($"ERROR: Missing {namedPath}"); return; }

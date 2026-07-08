@@ -37,6 +37,15 @@ namespace SkyrimReleveler
         [Tooltip("Prints detailed per-NPC level computation info to the Synthesis log. Useful for diagnosing unexpected levels. Leave off for normal runs.")]
         public bool PrintDebugOutput { get; set; } = false;
 
+        // -------------------------------------------------------------------------
+        // Data file sync
+        // -------------------------------------------------------------------------
+        [Tooltip("If enabled, the patcher copies all JSON data files (named_npcs.json, customFollowers.json, excludedPerks.json, etc.) from the project's Data/ folder into Skyrim's Data folder before each run. Enable this when you have edited the JSONs in the project and want those changes to take effect. Disable to keep using whatever files are already deployed in Skyrim's Data folder.")]
+        public bool SyncDataFiles { get; set; } = true;
+
+        [Tooltip("Full path to the folder containing your edited JSON data files (named_npcs.json, customFollowers.json, excludedPerks.json, raceLevelModifiers.json). When SyncDataFiles is enabled, files from this folder are copied into Skyrim's Data folder before the patch runs. Example: C:\\Users\\You\\Documents\\GitHub\\SkyrimReleveler\\SkyrimReleveler\\Data")]
+        public string DataSourcePath { get; set; } = "";
+
         [Tooltip("Dumps all race EditorIDs from the full load order to the log at startup, then continues normally. Use this after adding new mods to check for new races that may need classifier attention. Safe to leave off during normal runs.")]
         public bool DumpRaces { get; set; } = false;
 

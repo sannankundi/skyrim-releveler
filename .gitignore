@@ -211,6 +211,9 @@ project.lock.json
 # Visual Studio Code
 .vscode/
 
+# Kiro AI specs and workspace files
+.kiro/
+
 # Output folder used by Webpack or other FE stuff
 **/node_modules/*
 **/wwwroot/*
