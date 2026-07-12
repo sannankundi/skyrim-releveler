@@ -3,12 +3,6 @@
   "_comment2": "Applied to NPCs whose race EditorID contains any Key (and none of ForbiddenKeys).",
   "Data": [
     {
-      "Keys": [ "Dragon" ],
-      "ForbiddenKeys": [],
-      "LevelModifierAdd": 50,
-      "LevelModifierMult": 0.2
-    },
-    {
       "Keys": [ "Draugr", "Vampire" ],
       "ForbiddenKeys": [],
       "LevelModifierAdd": 10,

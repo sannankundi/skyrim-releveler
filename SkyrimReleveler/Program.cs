@@ -17,9 +17,6 @@ using Mutagen.Bethesda.FormKeys.SkyrimSE;
 
 namespace SkyrimReleveler
 {
-    // -------------------------------------------------------------------------
-    // Data types for JSON config files
-    // -------------------------------------------------------------------------
     public class ExcludedList
     {
         [JsonProperty] public List<string> Keys { get; set; } = new();
@@ -39,9 +36,6 @@ namespace SkyrimReleveler
         [JsonProperty] public List<RaceEntry> Data { get; set; } = new();
     }
 
-    // -------------------------------------------------------------------------
-    // Tier system
-    // -------------------------------------------------------------------------
     public static class TierSystem
     {
         public const int Count = 15;
@@ -95,9 +89,6 @@ namespace SkyrimReleveler
         public static string GetName(int tier) => Names[tier];
     }
 
-    // -------------------------------------------------------------------------
-    // Per-NPC data collected in the pre-pass
-    // -------------------------------------------------------------------------
     public class NpcAssessment
     {
         public FormKey FormKey { get; set; }
@@ -106,7 +97,6 @@ namespace SkyrimReleveler
         public int? EffectiveLevel { get; set; }
         public int CalcMax { get; set; }
         public float EquipmentScore { get; set; }
-        // Peer group: faction EditorID (first hostile faction found), race FormKey
         public string? FactionKey { get; set; }
         public FormKey RaceFormKey { get; set; }
     }
@@ -119,7 +109,6 @@ namespace SkyrimReleveler
 
         public static List<string> highPoweredNpcs = new();
 
-        // Civilian class terms — NPCs with Unique flag and one of these class terms stay PC-scaled
         private static readonly List<string> CivilianClassTerms = new()
         {
             "smith", "alchem", "enchant", "vendor", "apothec",
@@ -127,7 +116,6 @@ namespace SkyrimReleveler
             "priest", "bard", "jarl", "steward"
         };
 
-        // Classes whose NPCs are skipped during class rebuild (vendors, crafters, etc.)
         private static readonly List<string> ExcludedClasses = new()
             { "smith", "alchem", "enchant", "vendor", "apothec" };
 
@@ -147,9 +135,6 @@ namespace SkyrimReleveler
                 .Run(args);
         }
 
-        // -------------------------------------------------------------------------
-        // Level utilities
-        // -------------------------------------------------------------------------
         public static int? GetEffectiveLevel(INpcGetter npc)
         {
             switch (npc.Configuration.Level)
@@ -225,9 +210,6 @@ namespace SkyrimReleveler
             return best;
         }
 
-        // -------------------------------------------------------------------------
-        // Classifier — assigns a tier (0-14) to an NPC
-        // -------------------------------------------------------------------------
         private static bool ContainsAny(string? s, params string[] patterns)
         {
             if (s is null) return false;
@@ -245,13 +227,8 @@ namespace SkyrimReleveler
             if (npc.Race.TryResolve(lc, out var race))
                 raceEditorId = race.EditorID;
 
-            // --- Step 1: broad category from race keywords ---
             int tier = ClassifyByRaceKeyword(race, raceEditorId);
-
-            // --- Step 2: NPC EditorID / display name overrides (applied after race, only upgrade) ---
             tier = ApplyNpcNameOverrides(tier, editorId, npcName);
-
-            // --- Step 3: NPC keyword overrides (vampire flags) ---
             tier = ApplyNpcKeywordOverrides(npc, tier, lc);
 
             return tier;
@@ -259,9 +236,8 @@ namespace SkyrimReleveler
 
         private static int ClassifyByRaceKeyword(IRaceGetter? race, string? raceEditorId)
         {
-            if (race is null) return 12; // default humanoid
+            if (race is null) return 12;
 
-            // Priority order matches requirements
             if (race.HasKeyword(Skyrim.Keyword.ActorTypeDragon))
                 return ClassifyDragon(raceEditorId);
 
@@ -275,8 +251,7 @@ namespace SkyrimReleveler
                 return ClassifyConstruct(raceEditorId);
 
             if (race.HasKeyword(Skyrim.Keyword.ActorTypeGhost))
-                return 9; // spirits/ghosts classified as undead tier
-            // Werewolf detection via race EditorID (no vanilla FormKey constant available)
+                return 9;
             if (race.EditorID?.Contains("Werewolf", StringComparison.OrdinalIgnoreCase) == true ||
                 race.EditorID?.Contains("Werebear",  StringComparison.OrdinalIgnoreCase) == true ||
                 race.EditorID?.Contains("Werebat",   StringComparison.OrdinalIgnoreCase) == true)
@@ -287,15 +262,12 @@ namespace SkyrimReleveler
 
             if (race.HasKeyword(Skyrim.Keyword.ActorTypeAnimal))
             {
-                // Some "animal" races are actually dangerous monsters —
-                // check race EditorID before defaulting to vermin tier
                 return ClassifyAnimalOrCreature(raceEditorId, isForcedAnimal: true);
             }
 
             if (race.HasKeyword(Skyrim.Keyword.ActorTypeCreature))
                 return ClassifyAnimalOrCreature(raceEditorId, isForcedAnimal: false);
 
-            // No keyword matched — try race EditorID as last resort before humanoid default
             return ClassifyAnimalOrCreature(raceEditorId, isForcedAnimal: false);
         }
 
@@ -304,7 +276,6 @@ namespace SkyrimReleveler
             if (raceId is null) return 2;
             if (raceId.Equals("AlduinRace", StringComparison.OrdinalIgnoreCase)) return 1;
             if (ContainsAny(raceId, "DragonPriest")) return 3;
-            // Half-dragon and dragoman variants — still dragon tier
             if (ContainsAny(raceId, "HalfDragon", "Dragoman", "WereDrake")) return 2;
             return 2;
         }
@@ -312,16 +283,14 @@ namespace SkyrimReleveler
         private static int ClassifyDaedra(string? raceId)
         {
             if (raceId is null) return 4;
-            // High daedra tier
             if (ContainsAny(raceId, "Dremora", "Xivilai", "Xivkyn", "GoldenSaint", "DarkSeducer",
                                     "Auroran", "KnightOfOrder", "OrderKnight", "OrderPriest",
                                     "Hunger", "FleshAtronach", "IronAtronach", "EarthAtronach"))
                 return 4;
-            // Mid daedra tier
             if (ContainsAny(raceId, "Scamp", "Clannfear", "Daedroth", "Grummite", "Balliwog",
                                     "Banekin", "SpiderDaedra", "Watcher"))
                 return 7;
-            return 4; // default Daedra = high
+            return 4;
         }
 
         private static int ClassifyUndead(string? raceId)
@@ -332,11 +301,9 @@ namespace SkyrimReleveler
             if (ContainsAny(raceId, "Lich", "DragonPriest", "BoneLord",
                                     "EbonyPriest", "WraithKnight", "WraithLord",
                                     "WraithWitch", "WraithArchwitch")) return 3;
-            // Mid undead — named elite variants
             if (ContainsAny(raceId, "HulkingDraugr", "DraugrJyrik", "DraugrGiant",
                                     "SkeletonGoliath", "BoneColossus", "BoneHulk",
                                     "ShamblesLord", "BoneLord")) return 6;
-            // Everything else: draugr, skeleton, ghost, wraith, wight, etc.
             return 9;
         }
 
@@ -360,7 +327,6 @@ namespace SkyrimReleveler
         {
             if (raceId is null) return isForcedAnimal ? 14 : 13;
 
-            // Tier 7 — large dangerous monsters (override animal flag if present)
             if (ContainsAny(raceId, "Mammoth", "Giant", "Troll", "Hagrave", "Spriggan",
                                     "Chaurus", "Falmer", "Lurker", "Dreugh",
                                     "Griffon", "Gorgon", "Minotaur",
@@ -368,11 +334,9 @@ namespace SkyrimReleveler
                                     "FleshGuardian", "BirdMan", "HalfDragon"))
                 return 7;
 
-            // Tier 10 — Spriggan/Hagrave/Troll/Wispmother range (if not already caught above)
             if (ContainsAny(raceId, "Wispmother", "WillOWisp", "WillOtheWisp"))
                 return 10;
 
-            // Tier 11 — dangerous wildlife
             if (ContainsAny(raceId, "Bear", "Sabrecat", "Wolf", "Spider", "DeathHound",
                                     "Gargoyle", "IceWraith", "Wisp",
                                     "Raptor", "Panther", "Lion", "Hyena", "Tiger",
@@ -382,24 +346,19 @@ namespace SkyrimReleveler
                                     "Frostbite", "Skeever", "Riekling"))
                 return 11;
 
-            // Pure vermin / passive animals
             if (ContainsAny(raceId, "Skeever", "Rat", "Dog", "Horse", "Goat", "Sheep",
                                     "Cow", "Chicken", "Rabbit", "Deer", "Elk",
                                     "Fox", "Hare", "Pig", "Goose", "Crab",
                                     "Reindeer", "Netch", "Boar"))
                 return 14;
 
-            // If it was explicitly animal-flagged and no pattern matched, it's passive
             if (isForcedAnimal) return 14;
 
-            // Generic creature with no match
             return 13;
         }
 
         private static int ApplyNpcNameOverrides(int currentTier, string? editorId, string? name)
         {
-            // Only upgrades (lower tier number = more powerful). Never downgrades.
-            // Cosmic override
             if (ContainsAny(editorId, "MolagBal", "Jyggalag", "Shoggoth", "DaedricPrince",
                                       "MolagInner", "ShoggothMother") ||
                 ContainsAny(name,     "Molag Bal", "Jyggalag", "Shoggoth", "Daedric Prince"))
