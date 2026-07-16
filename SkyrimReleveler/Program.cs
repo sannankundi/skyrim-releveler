@@ -903,6 +903,8 @@ namespace SkyrimReleveler
             if (w.BossToken       != 0f) n++;
             if (w.UniqueVoiceType != 0f) n++;
             if (w.ModOriginUnique != 0f) n++;
+            if (w.BossClass       != 0f) n++;
+            if (w.ActorTypeKeyword!= 0f) n++;
             return n;
         }
 

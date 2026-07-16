@@ -1,19 +1,21 @@
 {
   "UniqueFlag":         0.20,
   "EssentialFlag":      0.25,
-  "ProtectedFlag":      0.10,
-  "NoRespawnFlag":      0.10,
+  "ProtectedFlag":      0.08,
+  "NoRespawnFlag":      0.08,
   "CalcMinLevelHigh":   0.15,
   "CalcMaxLevelHigh":   0.15,
   "PcLevelMult":        0.05,
   "HighFactionRank":    0.15,
-  "ManyFactions":       0.10,
-  "ManyKeywords":       0.05,
+  "ManyFactions":       0.08,
+  "ManyKeywords":       0.03,
   "HasCombatStyle":     0.05,
-  "HasScripts":         0.10,
-  "BossToken":          0.30,
-  "UniqueVoiceType":    0.15,
-  "ModOriginUnique":    0.20,
+  "HasScripts":         0.05,
+  "BossToken":          0.15,
+  "UniqueVoiceType":    0.08,
+  "ModOriginUnique":    0.12,
+  "BossClass":          0.35,
+  "ActorTypeKeyword":   0.20,
 
   "CalcMinLevelThreshold":  50,
   "CalcMaxLevelThreshold":  100,
@@ -26,7 +28,28 @@
 
   "BossTokens":        ["boss","chief","master","lord","king","queen","elder","ancient","arch","high"],
   "GenericVoiceTypes": ["MaleEvenToned","FemaleEvenToned","MaleGuard","FemaleCommoner",
-                        "MaleCommoner","MaleBrute","MaleNord","FemaleNord"],
+                        "MaleCommoner","MaleBrute","MaleNord","FemaleNord",
+                        "MaleOld","FemaleOld","MaleYoungEager","FemaleYoungEager",
+                        "MaleChild","FemaleChild","MaleSoldier","FemaleSoldier"],
+
+  "BossClassTokens": [
+    "DragonPriest","Dremora","EbonyWarrior","Miraak","Karstaag",
+    "Haknir","Vyrthur","WerewolfBoss","Dragon","Atronach",
+    "Draugr","Falmer","Hagraven","Spriggan","Vampire","Gargoyle",
+    "Lurker","Seeker","AshGuardian","Ancient","NordHero","MQAncient",
+    "Nightingale","Blade","Forsworn","PenitusOculatus","Giant",
+    "Centurion","DwarvenSphere","DwarvenSpider","IceWraith","Chaurus",
+    "Mammoth","Horker","FrostbiteSpider","MudCrab","Werewolf",
+    "Predator","Bear","Vigilant","Riekling","Seeker",
+    "DLC2Neloth","DLC2dunKolbjorn","DLC1CClass","DLC2EbonyWarrior",
+    "MQLabyrinthian","EncClassDragonPriest","EncClassDragon"
+  ],
+
+  "ChildClassTokens": ["Child"],
+
+  "BossActorTypeKeywords": [
+    "ActorTypeDLC1Boss","ActorTypeSpirit"
+  ],
 
   "ContradictionPairs": [
     { "SignalA": "UniqueFlag",    "SignalB": "NoRespawnFlag",    "Weight": 0.3 },

@@ -40,6 +40,8 @@ namespace SkyrimReleveler
             Add("BossToken",        BossToken,        weights.BossToken);
             Add("UniqueVoiceType",  UniqueVoiceType,  weights.UniqueVoiceType);
             Add("ModOriginUnique",  ModOriginUnique,  weights.ModOriginUnique);
+            Add("BossClass",        BossClass,        weights.BossClass);
+            Add("ActorTypeKeyword", ActorTypeKeyword, weights.ActorTypeKeyword);
 
             void Add(string name,
                      Func<INpcGetter, ILinkCache, ImportanceWeights, float> fn,
@@ -56,6 +58,23 @@ namespace SkyrimReleveler
         /// </summary>
         public static ScoreResult Score(INpcGetter npc, ILinkCache linkCache, ImportanceWeights weights)
         {
+            // Resolve class once — used for child suppression and boss elevation
+            string? classId = null;
+            string? className = null;
+            var resolvedClass = npc.Class.TryResolve(linkCache);
+            if (resolvedClass is not null)
+            {
+                classId   = resolvedClass.EditorID ?? "";
+                className = resolvedClass.Name?.String ?? "";
+            }
+
+            // Check if NPC has a boss-tier class — if so, civilian/child suppression is ignored
+            bool hasBossClass = IsBossClass(classId, className, weights);
+
+            // If child class and no boss class override → return zero score immediately
+            if (!hasBossClass && IsChildClass(classId, className, weights))
+                return new ScoreResult(0f, 1f, Array.Empty<string>());
+
             float numerator   = 0f;
             float denominator = 0f;
             var   firedNames  = new List<string>();
@@ -104,6 +123,26 @@ namespace SkyrimReleveler
             float confidence = 1f - contradictionScore;
 
             return new ScoreResult(score, confidence, firedNames.AsReadOnly());
+        }
+
+        private static bool IsBossClass(string? classId, string? className, ImportanceWeights w)
+        {
+            if (classId is null) return false;
+            foreach (var token in w.BossClassTokens)
+                if (classId.Contains(token, StringComparison.OrdinalIgnoreCase) ||
+                    (className?.Contains(token, StringComparison.OrdinalIgnoreCase) ?? false))
+                    return true;
+            return false;
+        }
+
+        private static bool IsChildClass(string? classId, string? className, ImportanceWeights w)
+        {
+            if (classId is null) return false;
+            foreach (var token in w.ChildClassTokens)
+                if (classId.Equals(token, StringComparison.OrdinalIgnoreCase) ||
+                    (className?.Equals(token, StringComparison.OrdinalIgnoreCase) ?? false))
+                    return true;
+            return false;
         }
 
         /// <summary>
@@ -203,6 +242,27 @@ namespace SkyrimReleveler
             if (modKey == Mutagen.Bethesda.FormKeys.SkyrimSE.Dragonborn.ModKey) return 0f;
 
             return 1f;
+        }
+
+        private static float BossClass(INpcGetter npc, ILinkCache lc, ImportanceWeights w)
+        {
+            var cls = npc.Class.TryResolve(lc);
+            if (cls is null) return 0f;
+            return IsBossClass(cls.EditorID, cls.Name?.String, w) ? 1f : 0f;
+        }
+
+        private static float ActorTypeKeyword(INpcGetter npc, ILinkCache lc, ImportanceWeights w)
+        {
+            if (npc.Keywords is null) return 0f;
+            foreach (var kw in npc.Keywords)
+            {
+                var kwRecord = kw.TryResolve(lc);
+                if (kwRecord?.EditorID is null) continue;
+                foreach (var token in w.BossActorTypeKeywords)
+                    if (kwRecord.EditorID.Contains(token, StringComparison.OrdinalIgnoreCase))
+                        return 1f;
+            }
+            return 0f;
         }
     }
 }

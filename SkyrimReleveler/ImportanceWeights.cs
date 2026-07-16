@@ -26,9 +26,11 @@ namespace SkyrimReleveler
         [JsonProperty] public float ManyKeywords       { get; set; } = 0.05f;
         [JsonProperty] public float HasCombatStyle     { get; set; } = 0.05f;
         [JsonProperty] public float HasScripts         { get; set; } = 0.10f;
-        [JsonProperty] public float BossToken          { get; set; } = 0.30f;
-        [JsonProperty] public float UniqueVoiceType    { get; set; } = 0.15f;
-        [JsonProperty] public float ModOriginUnique    { get; set; } = 0.20f;
+        [JsonProperty] public float BossToken          { get; set; } = 0.15f;
+        [JsonProperty] public float UniqueVoiceType    { get; set; } = 0.08f;
+        [JsonProperty] public float ModOriginUnique    { get; set; } = 0.12f;
+        [JsonProperty] public float BossClass          { get; set; } = 0.35f;
+        [JsonProperty] public float ActorTypeKeyword   { get; set; } = 0.20f;
 
         // --- numeric thresholds ---
         [JsonProperty] public int CalcMinLevelThreshold  { get; set; } = 50;
@@ -53,6 +55,34 @@ namespace SkyrimReleveler
             "MaleEvenToned", "FemaleEvenToned",
             "MaleGuard", "FemaleCommoner", "MaleCommoner",
             "MaleBrute", "MaleNord", "FemaleNord"
+        };
+
+        // Boss-tier class EditorID tokens — NPC class matches one of these → strong importance signal
+        [JsonProperty] public List<string> BossClassTokens { get; set; } = new()
+        {
+            "DragonPriest", "Dremora", "EbonyWarrior", "Miraak", "Karstaag",
+            "Haknir", "Vyrthur", "WerewolfBoss", "Giant", "Dragon",
+            "Atronach", "Draugr", "Falmer", "Hagraven", "Spriggan",
+            "Vampire", "Gargoyle", "Lurker", "Seeker", "AshGuardian",
+            "Ancient", "NordHero", "MQAncient", "Nightingale", "Blade",
+            "Forsworn", "PenitusOculatus", "Penitus",
+            "Centurion", "DwarvenSphere", "DwarvenSpider", "IceWraith", "Chaurus",
+            "Mammoth", "Horker", "FrostbiteSpider", "MudCrab", "Werewolf",
+            "Predator", "Bear", "Vigilant", "Riekling",
+            "DLC2Neloth", "DLC2dunKolbjorn", "DLC1CClass", "DLC2EbonyWarrior",
+            "MQLabyrinthian", "EncClassDragonPriest", "EncClassDragon"
+        };
+
+        // Child/civilian class EditorIDs that suppress importance score (exact match, overridden by boss class)
+        [JsonProperty] public List<string> ChildClassTokens { get; set; } = new()
+        {
+            "Child"
+        };
+
+        // Actor type keyword tokens that indicate a boss/spirit NPC
+        [JsonProperty] public List<string> BossActorTypeKeywords { get; set; } = new()
+        {
+            "ActorTypeDLC1Boss", "ActorTypeSpirit"
         };
 
         // --- contradiction pairs ---
@@ -83,6 +113,8 @@ namespace SkyrimReleveler
             SanitizeField(nameof(BossToken),        BossToken,        v => BossToken        = v);
             SanitizeField(nameof(UniqueVoiceType),  UniqueVoiceType,  v => UniqueVoiceType  = v);
             SanitizeField(nameof(ModOriginUnique),  ModOriginUnique,  v => ModOriginUnique  = v);
+            SanitizeField(nameof(BossClass),        BossClass,        v => BossClass        = v);
+            SanitizeField(nameof(ActorTypeKeyword), ActorTypeKeyword, v => ActorTypeKeyword = v);
         }
 
         private static void SanitizeField(string name, float value, Action<float> setter)
