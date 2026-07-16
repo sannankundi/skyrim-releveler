@@ -99,6 +99,8 @@ namespace SkyrimReleveler
         public float EquipmentScore { get; set; }
         public string? FactionKey { get; set; }
         public FormKey RaceFormKey { get; set; }
+        public bool IsModOrigin { get; set; }
+        public bool HasPeerGroup { get; set; }
     }
 
     public class Program
@@ -883,11 +885,61 @@ namespace SkyrimReleveler
             npc.Configuration.CalcMaxLevel = newLevel;
         }
 
+        private static int CountActiveSignals(ImportanceWeights w)
+        {
+            int n = 0;
+            if (w.UniqueFlag      != 0f) n++;
+            if (w.EssentialFlag   != 0f) n++;
+            if (w.ProtectedFlag   != 0f) n++;
+            if (w.NoRespawnFlag   != 0f) n++;
+            if (w.CalcMinLevelHigh!= 0f) n++;
+            if (w.CalcMaxLevelHigh!= 0f) n++;
+            if (w.PcLevelMult     != 0f) n++;
+            if (w.HighFactionRank != 0f) n++;
+            if (w.ManyFactions    != 0f) n++;
+            if (w.ManyKeywords    != 0f) n++;
+            if (w.HasCombatStyle  != 0f) n++;
+            if (w.HasScripts      != 0f) n++;
+            if (w.BossToken       != 0f) n++;
+            if (w.UniqueVoiceType != 0f) n++;
+            if (w.ModOriginUnique != 0f) n++;
+            return n;
+        }
+
+        // Returns token-boundary prefixes of an EditorID, longest first, min length 3.
+        // e.g. "zzzaombossmedium" -> ["zzzaombossmedium","zzzaomboss","zzzaom","zzz"]
+        private static IEnumerable<string> GetEditorIdPrefixes(string editorId)
+        {
+            if (string.IsNullOrEmpty(editorId)) yield break;
+
+            // Find all CamelCase / underscore token boundary positions
+            var boundaries = new List<int> { editorId.Length };
+            for (int i = 1; i < editorId.Length; i++)
+            {
+                bool isBoundary =
+                    (char.IsUpper(editorId[i]) && char.IsLower(editorId[i - 1])) ||
+                    (char.IsUpper(editorId[i]) && i + 1 < editorId.Length && char.IsLower(editorId[i + 1]) && char.IsUpper(editorId[i - 1])) ||
+                    (char.IsDigit(editorId[i]) != char.IsDigit(editorId[i - 1])) ||
+                    editorId[i] == '_';
+                if (isBoundary)
+                    boundaries.Add(i);
+            }
+
+            // Sort descending so longest prefix comes first
+            boundaries.Sort((a, b) => b.CompareTo(a));
+
+            foreach (var len in boundaries)
+            {
+                if (len < 3) break;
+                yield return editorId.Substring(0, len).ToLowerInvariant();
+            }
+        }
+
         public static void PrintWarnings()
         {
             if (highPoweredNpcs.Count > 0)
             {
-                Console.WriteLine($"Warning: {highPoweredNpcs.Count} NPCs assigned level > 100:");
+                Console.WriteLine($"Notable named NPCs assigned high levels: {highPoweredNpcs.Count}");
                 foreach (var item in highPoweredNpcs) Console.WriteLine("  " + item);
             }
         }
@@ -956,6 +1008,32 @@ namespace SkyrimReleveler
                 GameRelease.SkyrimSE).ToImmutableLinkCache();
 
             Console.WriteLine("  Data files loaded. Starting pre-pass...");
+
+            var iwPath = Path.Combine(state.ExtraSettingsDataPath, "importanceWeights.json");
+            ImportanceWeights importanceWeights;
+            try
+            {
+                if (File.Exists(iwPath))
+                {
+                    importanceWeights = JsonConvert.DeserializeObject<ImportanceWeights>(File.ReadAllText(iwPath)) ?? new ImportanceWeights();
+                    importanceWeights.Sanitize();
+                    int activeSignals = CountActiveSignals(importanceWeights);
+                    Console.WriteLine($"  importanceWeights.json : {iwPath} ({activeSignals} active signals)");
+                }
+                else
+                {
+                    importanceWeights = new ImportanceWeights();
+                    Console.WriteLine("  importanceWeights.json not found — using hard-coded defaults");
+                }
+            }
+            catch (Exception ex)
+            {
+                importanceWeights = new ImportanceWeights();
+                Console.WriteLine($"  [WARNING] Failed to load importanceWeights.json: {ex.Message} — using defaults");
+            }
+            ImportanceScorer.Initialize(importanceWeights);
+
+            using var reviewLogger = new ReviewLogger(Path.Combine(state.ExtraSettingsDataPath, "review_npcs.log"));
             Console.WriteLine();
 
             var linkCache = state.LoadOrder.PriorityOrder.ToImmutableLinkCache();
@@ -1141,7 +1219,11 @@ namespace SkyrimReleveler
                     EquipmentScore = equipScore,
                     FactionKey     = bestFaction,
                     RaceFormKey    = raceFormKey,
+                    IsModOrigin    = getter.FormKey.ModKey != Skyrim.ModKey &&
+                                     getter.FormKey.ModKey != Dawnguard.ModKey &&
+                                     getter.FormKey.ModKey != Dragonborn.ModKey,
                 };
+                // HasPeerGroup is determined after source ranges are built — set below
                 assessments[getter.FormKey] = assessment;
 
                 // Accumulate effective levels into peer lists
@@ -1189,7 +1271,6 @@ namespace SkyrimReleveler
             foreach (var a in assessments.Values)
             {
                 if (a.EffectiveLevel is null || a.EffectiveLevel.Value <= 0) continue;
-                // Only use stem path for NPCs that have no qualifying faction
                 if (a.FactionKey is not null && factionSourceRange.ContainsKey(a.FactionKey)) continue;
                 string stem = GetStem(a.EditorId);
                 string stemKey = $"{a.Tier}|{stem}";
@@ -1204,15 +1285,49 @@ namespace SkyrimReleveler
                 if (lvls.Count >= 5)
                     stemSourceRange[sk] = GetTrimmedRange(lvls, cutoff);
 
+            // Prefix peer groups (Path 3b) — EditorID token-prefix groups, within same tier
+            // For each NPC, generate all token-boundary prefixes and accumulate levels.
+            // Key = tier + "|prefix" so groups are tier-scoped.
+            var prefixEffLevels = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var a in assessments.Values)
+            {
+                if (a.EffectiveLevel is null || a.EffectiveLevel.Value <= 0) continue;
+                if (a.FactionKey is not null && factionSourceRange.ContainsKey(a.FactionKey)) continue;
+                foreach (var prefix in GetEditorIdPrefixes(a.EditorId))
+                {
+                    string key = $"{a.Tier}|{prefix}";
+                    if (!prefixEffLevels.TryGetValue(key, out var pl))
+                        prefixEffLevels[key] = pl = new List<int>();
+                    pl.Add(a.EffectiveLevel.Value);
+                }
+            }
+            foreach (var lst in prefixEffLevels.Values) lst.Sort();
+
+            var prefixSourceRange = new Dictionary<string, (int Min, int Max)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (pk, lvls) in prefixEffLevels)
+                if (lvls.Count >= minPeers)
+                    prefixSourceRange[pk] = GetTrimmedRange(lvls, cutoff);
+
             var tierSourceRange = new Dictionary<int, (int Min, int Max)>();
             foreach (var (tk, lvls) in tierEffLevels)
                 tierSourceRange[tk] = GetTrimmedRange(lvls, cutoff);
+
+            foreach (var a in assessments.Values)
+            {
+                string stem = GetStem(a.EditorId);
+                a.HasPeerGroup =
+                    (a.FactionKey is not null && factionSourceRange.ContainsKey(a.FactionKey)) ||
+                    raceSourceRange.ContainsKey(a.RaceFormKey) ||
+                    stemSourceRange.ContainsKey($"{a.Tier}|{stem}") ||
+                    GetEditorIdPrefixes(a.EditorId).Any(p => prefixSourceRange.ContainsKey($"{a.Tier}|{p}"));
+            }
 
             Console.WriteLine();
             Console.WriteLine("=== Skyrim Releveler — Assessment Pass ===");
             Console.WriteLine($"  NPCs assessed        : {assessments.Count}");
             Console.WriteLine($"  Factions with ranges : {factionSourceRange.Count}");
             Console.WriteLine($"  Stem groups (Path 3) : {stemSourceRange.Count}");
+            Console.WriteLine($"  Prefix groups (3b)   : {prefixSourceRange.Count}");
             Console.WriteLine($"  Tiers covered        : {tierSourceRange.Count}");
             Console.WriteLine();
 
@@ -1262,8 +1377,29 @@ namespace SkyrimReleveler
                     // PATH 4: equipment score within tier range (pure fallback)
                     else
                     {
-                        baseLevel = Math.Round(tMin + (decimal)a.EquipmentScore * (tMax - tMin));
-                        mode = "equipment-score";
+                        // PATH 3b: longest EditorID token-prefix group (≥ minPeers, within tier)
+                        (int Min, int Max) psr = default;
+                        string? matchedPrefix = null;
+                        foreach (var prefix in GetEditorIdPrefixes(a.EditorId))
+                        {
+                            string pk = $"{tier}|{prefix}";
+                            if (prefixSourceRange.TryGetValue(pk, out psr))
+                            { matchedPrefix = prefix; break; }
+                        }
+
+                        if (matchedPrefix is not null)
+                        {
+                            int clamped = Math.Clamp(effLvl > 0 ? effLvl : psr.Min, psr.Min, psr.Max);
+                            baseLevel = effLvl > 0
+                                ? MapLevel(clamped, psr.Min, psr.Max, tMin, tMax)
+                                : Math.Round((tMin + tMax) / 2m);
+                            mode = $"prefix({matchedPrefix}) src=[{psr.Min},{psr.Max}]";
+                        }
+                        else
+                        {
+                            baseLevel = Math.Round(tMin + (decimal)a.EquipmentScore * (tMax - tMin));
+                            mode = "equipment-score";
+                        }
                     }
                 }
 
@@ -1277,7 +1413,8 @@ namespace SkyrimReleveler
             // Main pass: assign levels and apply all subsystems
             // -----------------------------------------------------------------------
             int followersScaled = 0, namedCount = 0, civiliansScaled = 0,
-                pipelineCount = 0, npcsProcessed = 0;
+                pipelineCount = 0, npcsProcessed = 0,
+                floorRaisedCount = 0, reviewLoggedCount = 0, zeroScoreCount = 0;
 
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
@@ -1337,8 +1474,23 @@ namespace SkyrimReleveler
                 {
                     short baseLevel = ComputeLevel(assessment);
 
-                    // Post-score adjustments
-                    decimal adjusted = baseLevel + Settings.GlobalOffset;
+                    // Importance score floor
+                    var scoreResult = ImportanceScorer.Score(getter, linkCache, importanceWeights);
+                    int floorLevel  = ImportanceScorer.DeriveFloor(scoreResult.Score, assessment.Tier, Settings.WorldMaxLevel);
+                    int finalBase   = Math.Max(baseLevel, floorLevel);
+
+                    if (Settings.PrintDebugOutput)
+                    {
+                        if (floorLevel > baseLevel)
+                            Console.WriteLine($"  {editorId}: importance floor raised {baseLevel}→{floorLevel} (score={scoreResult.Score:F4} conf={scoreResult.Confidence:F4} signals=[{string.Join(",", scoreResult.FiredSignals)}])");
+                        else
+                            Console.WriteLine($"  {editorId}: importance score had no effect (score={scoreResult.Score:F4})");
+                    }
+
+                    if (floorLevel > baseLevel) ++floorRaisedCount;
+                    if (scoreResult.Score == 0f) ++zeroScoreCount;
+
+                    decimal adjusted = finalBase + Settings.GlobalOffset;
                     GetRaceModifier(getter, out var rAdd, out var rMult);
                     adjusted = Math.Round(adjusted * (decimal)rMult) + rAdd;
 
@@ -1348,18 +1500,27 @@ namespace SkyrimReleveler
 
                     short newLevel = (short)Math.Clamp(adjusted, 1, short.MaxValue);
 
-                    // Preserve higher mod-assigned CalcMaxLevel
+                    reviewLogger.MaybeWrite(getter, assessment, baseLevel, floorLevel, newLevel, scoreResult, importanceWeights);
+
                     short existingMax = getter.Configuration.CalcMaxLevel;
                     if (existingMax > 0 && existingMax > newLevel)
                     {
                         if (Settings.PrintDebugOutput)
                             Console.WriteLine($"  {editorId}: pipeline would set {newLevel} but existing CalcMaxLevel={existingMax} is higher — preserved");
-                        // Don't call ApplyLevel; still count as processed for stats
                         ++pipelineCount;
                     }
                     else
                     {
-                        if (newLevel > 100) highPoweredNpcs.Add(editorId);
+                        if (newLevel > 100)
+                        {
+                            // Only log named, non-generic NPCs — skip unnamed/template NPCs
+                            string? displayName = getter.Name?.String;
+                            bool isNamed = !string.IsNullOrWhiteSpace(displayName)
+                                && getter.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique)
+                                && !getter.Configuration.Flags.HasFlag(NpcConfiguration.Flag.IsCharGenFacePreset);
+                            if (isNamed)
+                                highPoweredNpcs.Add($"{displayName} [{editorId}] = {newLevel}");
+                        }
                         if (Settings.PrintDebugOutput)
                             Console.WriteLine($"    -> final {newLevel} (offset={Settings.GlobalOffset}, raceMult={rMult}, raceAdd={rAdd}, bonus={bonusPct}%)");
                         ApplyLevel(npcCopy, newLevel);
@@ -1390,6 +1551,9 @@ namespace SkyrimReleveler
             Console.WriteLine($"  Named overrides      : {namedCount}");
             Console.WriteLine($"  Civilians / named chars : {civiliansScaled}");
             Console.WriteLine($"  Followers            : {followersScaled}");
+            Console.WriteLine($"  Floor raised by score: {floorRaisedCount}");
+            Console.WriteLine($"  Review log entries   : {reviewLoggedCount}");
+            Console.WriteLine($"  Zero importance score: {zeroScoreCount}");
             Console.WriteLine();
             PrintWarnings();
         }

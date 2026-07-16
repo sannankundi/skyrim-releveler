@@ -1,0 +1,97 @@
+using System;
+using System.Collections.Generic;
+using Newtonsoft.Json;
+
+namespace SkyrimReleveler
+{
+    public class ContradictionPair
+    {
+        [JsonProperty] public string SignalA { get; set; } = "";
+        [JsonProperty] public string SignalB { get; set; } = "";
+        [JsonProperty] public float  Weight  { get; set; } = 0.0f;
+    }
+
+    public class ImportanceWeights
+    {
+        // --- per-signal weights (signal disabled when 0.0) ---
+        [JsonProperty] public float UniqueFlag         { get; set; } = 0.20f;
+        [JsonProperty] public float EssentialFlag      { get; set; } = 0.25f;
+        [JsonProperty] public float ProtectedFlag      { get; set; } = 0.10f;
+        [JsonProperty] public float NoRespawnFlag      { get; set; } = 0.10f;
+        [JsonProperty] public float CalcMinLevelHigh   { get; set; } = 0.15f;
+        [JsonProperty] public float CalcMaxLevelHigh   { get; set; } = 0.15f;
+        [JsonProperty] public float PcLevelMult        { get; set; } = 0.05f;
+        [JsonProperty] public float HighFactionRank    { get; set; } = 0.15f;
+        [JsonProperty] public float ManyFactions       { get; set; } = 0.10f;
+        [JsonProperty] public float ManyKeywords       { get; set; } = 0.05f;
+        [JsonProperty] public float HasCombatStyle     { get; set; } = 0.05f;
+        [JsonProperty] public float HasScripts         { get; set; } = 0.10f;
+        [JsonProperty] public float BossToken          { get; set; } = 0.30f;
+        [JsonProperty] public float UniqueVoiceType    { get; set; } = 0.15f;
+        [JsonProperty] public float ModOriginUnique    { get; set; } = 0.20f;
+
+        // --- numeric thresholds ---
+        [JsonProperty] public int CalcMinLevelThreshold  { get; set; } = 50;
+        [JsonProperty] public int CalcMaxLevelThreshold  { get; set; } = 100;
+        [JsonProperty] public int FactionRankThreshold   { get; set; } = 2;
+        [JsonProperty] public int MinFactionCount        { get; set; } = 3;
+        [JsonProperty] public int MinKeywordCount        { get; set; } = 5;
+
+        // --- review thresholds ---
+        [JsonProperty] public float LowConfidenceThreshold { get; set; } = 0.5f;
+        [JsonProperty] public float FloorDeltaThreshold    { get; set; } = 50.0f;
+
+        // --- lists ---
+        [JsonProperty] public List<string> BossTokens { get; set; } = new()
+        {
+            "boss", "chief", "master", "lord",
+            "king", "queen", "elder", "ancient", "arch", "high"
+        };
+
+        [JsonProperty] public List<string> GenericVoiceTypes { get; set; } = new()
+        {
+            "MaleEvenToned", "FemaleEvenToned",
+            "MaleGuard", "FemaleCommoner", "MaleCommoner",
+            "MaleBrute", "MaleNord", "FemaleNord"
+        };
+
+        // --- contradiction pairs ---
+        [JsonProperty] public List<ContradictionPair> ContradictionPairs { get; set; } = new()
+        {
+            new ContradictionPair { SignalA = "UniqueFlag",    SignalB = "NoRespawnFlag",      Weight = 0.3f },
+            new ContradictionPair { SignalA = "EssentialFlag", SignalB = "CalcMaxLevelHigh",   Weight = 0.2f },
+        };
+
+        /// <summary>
+        /// Clamps all weight fields: negative, NaN, or infinite values are replaced with 0.0
+        /// and a warning is logged for each offending field.
+        /// </summary>
+        public void Sanitize()
+        {
+            SanitizeField(nameof(UniqueFlag),       UniqueFlag,       v => UniqueFlag       = v);
+            SanitizeField(nameof(EssentialFlag),    EssentialFlag,    v => EssentialFlag    = v);
+            SanitizeField(nameof(ProtectedFlag),    ProtectedFlag,    v => ProtectedFlag    = v);
+            SanitizeField(nameof(NoRespawnFlag),    NoRespawnFlag,    v => NoRespawnFlag    = v);
+            SanitizeField(nameof(CalcMinLevelHigh), CalcMinLevelHigh, v => CalcMinLevelHigh = v);
+            SanitizeField(nameof(CalcMaxLevelHigh), CalcMaxLevelHigh, v => CalcMaxLevelHigh = v);
+            SanitizeField(nameof(PcLevelMult),      PcLevelMult,      v => PcLevelMult      = v);
+            SanitizeField(nameof(HighFactionRank),  HighFactionRank,  v => HighFactionRank  = v);
+            SanitizeField(nameof(ManyFactions),     ManyFactions,     v => ManyFactions     = v);
+            SanitizeField(nameof(ManyKeywords),     ManyKeywords,     v => ManyKeywords     = v);
+            SanitizeField(nameof(HasCombatStyle),   HasCombatStyle,   v => HasCombatStyle   = v);
+            SanitizeField(nameof(HasScripts),       HasScripts,       v => HasScripts       = v);
+            SanitizeField(nameof(BossToken),        BossToken,        v => BossToken        = v);
+            SanitizeField(nameof(UniqueVoiceType),  UniqueVoiceType,  v => UniqueVoiceType  = v);
+            SanitizeField(nameof(ModOriginUnique),  ModOriginUnique,  v => ModOriginUnique  = v);
+        }
+
+        private static void SanitizeField(string name, float value, Action<float> setter)
+        {
+            if (value < 0f || !float.IsFinite(value))
+            {
+                Console.WriteLine($"  [WARNING] ImportanceWeights: field '{name}' has invalid value {value}; clamping to 0.0");
+                setter(0f);
+            }
+        }
+    }
+}

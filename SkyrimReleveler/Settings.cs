@@ -79,8 +79,8 @@ namespace SkyrimReleveler
         // -------------------------------------------------------------------------
         // Auto-leveling system
         // -------------------------------------------------------------------------
-        [Tooltip("The absolute level ceiling assigned to the top of Tier 0 (Cosmic). Molag Bal, Jyggalag, and similar Daedric Prince-level entities map to this value. All tier ranges scale proportionally. Default is 1000.")]
-        public int WorldMaxLevel { get; set; } = 1000;
+        [Tooltip("The absolute level ceiling assigned to the top of Tier 0 (Cosmic). Molag Bal, Jyggalag, and similar Daedric Prince-level entities map to this value. All tier ranges scale proportionally. Default is 2000.")]
+        public int WorldMaxLevel { get; set; } = 2000;
 
         [Tooltip("Minimum number of NPCs that must share a faction before that faction is used as a peer group for percentile scoring. Factions with fewer members fall back to race-based peer comparison. Default is 3.")]
         public int AutoFactionMinPeers { get; set; } = 3;

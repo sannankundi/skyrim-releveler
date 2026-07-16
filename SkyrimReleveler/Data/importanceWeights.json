@@ -1,0 +1,35 @@
+{
+  "UniqueFlag":         0.20,
+  "EssentialFlag":      0.25,
+  "ProtectedFlag":      0.10,
+  "NoRespawnFlag":      0.10,
+  "CalcMinLevelHigh":   0.15,
+  "CalcMaxLevelHigh":   0.15,
+  "PcLevelMult":        0.05,
+  "HighFactionRank":    0.15,
+  "ManyFactions":       0.10,
+  "ManyKeywords":       0.05,
+  "HasCombatStyle":     0.05,
+  "HasScripts":         0.10,
+  "BossToken":          0.30,
+  "UniqueVoiceType":    0.15,
+  "ModOriginUnique":    0.20,
+
+  "CalcMinLevelThreshold":  50,
+  "CalcMaxLevelThreshold":  100,
+  "FactionRankThreshold":   2,
+  "MinFactionCount":        3,
+  "MinKeywordCount":        5,
+
+  "LowConfidenceThreshold": 0.5,
+  "FloorDeltaThreshold":    50.0,
+
+  "BossTokens":        ["boss","chief","master","lord","king","queen","elder","ancient","arch","high"],
+  "GenericVoiceTypes": ["MaleEvenToned","FemaleEvenToned","MaleGuard","FemaleCommoner",
+                        "MaleCommoner","MaleBrute","MaleNord","FemaleNord"],
+
+  "ContradictionPairs": [
+    { "SignalA": "UniqueFlag",    "SignalB": "NoRespawnFlag",    "Weight": 0.3 },
+    { "SignalA": "EssentialFlag", "SignalB": "CalcMaxLevelHigh", "Weight": 0.2 }
+  ]
+}
