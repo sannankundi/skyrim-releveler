@@ -16,12 +16,21 @@
   "ModOriginUnique":    0.12,
   "BossClass":          0.35,
   "ActorTypeKeyword":   0.20,
+  "HighSkillValue":     0.18,
+  "HighVanillaPerks":   0.12,
+  "AbsoluteEquipment":  0.15,
+  "RelativeEquipment":  0.22,
+  "UniqueItem":         0.25,
 
   "CalcMinLevelThreshold":  50,
   "CalcMaxLevelThreshold":  100,
   "FactionRankThreshold":   2,
   "MinFactionCount":        3,
   "MinKeywordCount":        5,
+  "HighSkillThreshold":     75,
+  "HighPerkCountThreshold": 5,
+  "AbsoluteEquipThreshold": 0.5,
+  "RelativeEquipRatio":     1.5,
 
   "LowConfidenceThreshold": 0.5,
   "FloorDeltaThreshold":    50.0,
@@ -49,6 +58,15 @@
 
   "BossActorTypeKeywords": [
     "ActorTypeDLC1Boss","ActorTypeSpirit"
+  ],
+
+  "UniqueItemKeywords": [
+    "Volendrung","Wuuthrad","EbonyBlade","MaceofMolagBal","SkullofdCorruption",
+    "Dawnbreaker","Mehrunes","AzurasStarBlack","AzurasStar","Nightingale",
+    "Chillrend","HaknirDeathBrand","AhzidalArmor",
+    "MolagBal","Auriel","EbonyMailCuirass",
+    "GauldurAmulet","Windshear","Longhammer","Namira","Clavicus",
+    "SaviorHide","HircinesRing","SkaalArmor","Karstaag"
   ],
 
   "ContradictionPairs": [

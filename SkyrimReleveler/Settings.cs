@@ -37,6 +37,9 @@ namespace SkyrimReleveler
         [Tooltip("Prints detailed per-NPC level computation info to the Synthesis log. Useful for diagnosing unexpected levels. Leave off for normal runs.")]
         public bool PrintDebugOutput { get; set; } = false;
 
+        [Tooltip("If enabled, overwrites all deployed data files (named_npcs.json, importanceWeights.json, etc.) with the bundled defaults on the next run. Turn on after updating the patcher to push new defaults. Automatically resets to false after running.")]
+        public bool ForceReseedData { get; set; } = false;
+
         [Tooltip("Dumps all race EditorIDs from the full load order to the log at startup, then continues normally. Use this after adding new mods to check for new races that may need classifier attention. Safe to leave off during normal runs.")]
         public bool DumpRaces { get; set; } = false;
 

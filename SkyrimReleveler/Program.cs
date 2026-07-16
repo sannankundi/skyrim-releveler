@@ -97,6 +97,9 @@ namespace SkyrimReleveler
         public int? EffectiveLevel { get; set; }
         public int CalcMax { get; set; }
         public float EquipmentScore { get; set; }
+        public float PeerAvgEquipScore { get; set; }
+        public int VanillaPerkCount { get; set; }
+        public int MaxSkillValue { get; set; }
         public string? FactionKey { get; set; }
         public FormKey RaceFormKey { get; set; }
         public bool IsModOrigin { get; set; }
@@ -888,23 +891,28 @@ namespace SkyrimReleveler
         private static int CountActiveSignals(ImportanceWeights w)
         {
             int n = 0;
-            if (w.UniqueFlag      != 0f) n++;
-            if (w.EssentialFlag   != 0f) n++;
-            if (w.ProtectedFlag   != 0f) n++;
-            if (w.NoRespawnFlag   != 0f) n++;
-            if (w.CalcMinLevelHigh!= 0f) n++;
-            if (w.CalcMaxLevelHigh!= 0f) n++;
-            if (w.PcLevelMult     != 0f) n++;
-            if (w.HighFactionRank != 0f) n++;
-            if (w.ManyFactions    != 0f) n++;
-            if (w.ManyKeywords    != 0f) n++;
-            if (w.HasCombatStyle  != 0f) n++;
-            if (w.HasScripts      != 0f) n++;
-            if (w.BossToken       != 0f) n++;
-            if (w.UniqueVoiceType != 0f) n++;
-            if (w.ModOriginUnique != 0f) n++;
-            if (w.BossClass       != 0f) n++;
-            if (w.ActorTypeKeyword!= 0f) n++;
+            if (w.UniqueFlag       != 0f) n++;
+            if (w.EssentialFlag    != 0f) n++;
+            if (w.ProtectedFlag    != 0f) n++;
+            if (w.NoRespawnFlag    != 0f) n++;
+            if (w.CalcMinLevelHigh != 0f) n++;
+            if (w.CalcMaxLevelHigh != 0f) n++;
+            if (w.PcLevelMult      != 0f) n++;
+            if (w.HighFactionRank  != 0f) n++;
+            if (w.ManyFactions     != 0f) n++;
+            if (w.ManyKeywords     != 0f) n++;
+            if (w.HasCombatStyle   != 0f) n++;
+            if (w.HasScripts       != 0f) n++;
+            if (w.BossToken        != 0f) n++;
+            if (w.UniqueVoiceType  != 0f) n++;
+            if (w.ModOriginUnique  != 0f) n++;
+            if (w.BossClass        != 0f) n++;
+            if (w.ActorTypeKeyword != 0f) n++;
+            if (w.HighSkillValue   != 0f) n++;
+            if (w.HighVanillaPerks != 0f) n++;
+            if (w.AbsoluteEquipment!= 0f) n++;
+            if (w.RelativeEquipment!= 0f) n++;
+            if (w.UniqueItem       != 0f) n++;
             return n;
         }
 
@@ -955,18 +963,21 @@ namespace SkyrimReleveler
             { Console.Error.WriteLine("ERROR: ExtraSettingsDataPath is null."); return; }
 
             // -----------------------------------------------------------------------
-            // Seed default data files from InternalData on first run (or if missing)
+            // Seed default data files from Data/ (build output) on first run (or if missing)
             // -----------------------------------------------------------------------
             Directory.CreateDirectory(state.ExtraSettingsDataPath);
-            if (state.InternalDataPath is not null)
+            string builtDataPath = Path.Combine(AppContext.BaseDirectory, "Data");
+            string seedSource = Directory.Exists(builtDataPath) ? builtDataPath
+                : state.InternalDataPath ?? "";
+            if (!string.IsNullOrEmpty(seedSource) && Directory.Exists(seedSource))
             {
-                foreach (var src in Directory.EnumerateFiles(state.InternalDataPath, "*.json", SearchOption.TopDirectoryOnly))
+                foreach (var src in Directory.EnumerateFiles(seedSource, "*.json", SearchOption.TopDirectoryOnly))
                 {
                     string dest = Path.Combine(state.ExtraSettingsDataPath, Path.GetFileName(src));
-                    if (!File.Exists(dest))
+                    if (!File.Exists(dest) || Settings.ForceReseedData)
                     {
-                        File.Copy(src, dest);
-                        Console.WriteLine($"  Seeded default data file: {Path.GetFileName(src)}");
+                        File.Copy(src, dest, overwrite: true);
+                        Console.WriteLine($"  {(Settings.ForceReseedData ? "Force-reseeded" : "Seeded")} data file: {Path.GetFileName(src)}");
                     }
                 }
             }
@@ -1181,12 +1192,11 @@ namespace SkyrimReleveler
             // -----------------------------------------------------------------------
             // assessments[formKey] = NpcAssessment
             var assessments = new Dictionary<FormKey, NpcAssessment>();
-            // factionEditorId -> effective levels of all members (for source range)
             var factionEffLevels = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-            // race peers: raceFormKey -> effective levels
             var raceEffLevels = new Dictionary<FormKey, List<int>>();
-            // tier members for no-faction fallback
             var tierEffLevels = new Dictionary<int, List<int>>();
+            var factionEquipScores = new Dictionary<string, List<float>>(StringComparer.OrdinalIgnoreCase);
+            var raceEquipScores = new Dictionary<FormKey, List<float>>();
 
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
@@ -1211,24 +1221,32 @@ namespace SkyrimReleveler
                 float equipScore = ComputeEquipmentScore(getter, linkCache);
                 int calcMax = getter.Configuration.CalcMaxLevel;
 
+                int vanillaPerkCount = getter.Perks?.Count ?? 0;
+                int maxSkill = 0;
+                if (getter.PlayerSkills is not null)
+                    foreach (var kv in getter.PlayerSkills.SkillValues)
+                        if (kv.Value > maxSkill) maxSkill = kv.Value;
+
                 var assessment = new NpcAssessment
                 {
-                    FormKey        = getter.FormKey,
-                    EditorId       = edId,
-                    Tier           = tier,
-                    EffectiveLevel = effLevel,
-                    CalcMax        = calcMax,
-                    EquipmentScore = equipScore,
-                    FactionKey     = bestFaction,
-                    RaceFormKey    = raceFormKey,
-                    IsModOrigin    = getter.FormKey.ModKey != Skyrim.ModKey &&
-                                     getter.FormKey.ModKey != Dawnguard.ModKey &&
-                                     getter.FormKey.ModKey != Dragonborn.ModKey,
+                    FormKey          = getter.FormKey,
+                    EditorId         = edId,
+                    Tier             = tier,
+                    EffectiveLevel   = effLevel,
+                    CalcMax          = calcMax,
+                    EquipmentScore   = equipScore,
+                    VanillaPerkCount = vanillaPerkCount,
+                    MaxSkillValue    = maxSkill,
+                    FactionKey       = bestFaction,
+                    RaceFormKey      = raceFormKey,
+                    IsModOrigin      = getter.FormKey.ModKey != Skyrim.ModKey &&
+                                       getter.FormKey.ModKey != Dawnguard.ModKey &&
+                                       getter.FormKey.ModKey != Dragonborn.ModKey,
                 };
                 // HasPeerGroup is determined after source ranges are built — set below
                 assessments[getter.FormKey] = assessment;
 
-                // Accumulate effective levels into peer lists
+                // Accumulate effective levels and equipment scores into peer lists
                 if (effLevel.HasValue && effLevel.Value > 0)
                 {
                     if (bestFaction is not null)
@@ -1246,12 +1264,42 @@ namespace SkyrimReleveler
                         tierEffLevels[tier] = tl = new List<int>();
                     tl.Add(effLevel.Value);
                 }
+
+                // Accumulate equipment scores for peer average computation
+                if (equipScore > 0f)
+                {
+                    if (bestFaction is not null)
+                    {
+                        if (!factionEquipScores.TryGetValue(bestFaction, out var fe))
+                            factionEquipScores[bestFaction] = fe = new List<float>();
+                        fe.Add(equipScore);
+                    }
+                    if (!raceEquipScores.TryGetValue(raceFormKey, out var re))
+                        raceEquipScores[raceFormKey] = re = new List<float>();
+                    re.Add(equipScore);
+                }
             }
 
             // Sort all level lists for trimmed-range calculation
             foreach (var lst in factionEffLevels.Values) lst.Sort();
             foreach (var lst in raceEffLevels.Values)    lst.Sort();
             foreach (var lst in tierEffLevels.Values)    lst.Sort();
+
+            // Compute peer average equipment scores
+            var factionAvgEquip = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (fk, scores) in factionEquipScores)
+                if (scores.Count > 0) factionAvgEquip[fk] = scores.Average();
+            var raceAvgEquip = new Dictionary<FormKey, float>();
+            foreach (var (rk, scores) in raceEquipScores)
+                if (scores.Count > 0) raceAvgEquip[rk] = scores.Average();
+
+            foreach (var a in assessments.Values)
+            {
+                if (a.FactionKey is not null && factionAvgEquip.TryGetValue(a.FactionKey, out var fa))
+                    a.PeerAvgEquipScore = fa;
+                else if (raceAvgEquip.TryGetValue(a.RaceFormKey, out var ra))
+                    a.PeerAvgEquipScore = ra;
+            }
 
             float cutoff = Settings.OutlierPercentileCutoff;
             int   minPeers = Settings.AutoFactionMinPeers;
@@ -1477,7 +1525,7 @@ namespace SkyrimReleveler
                     short baseLevel = ComputeLevel(assessment);
 
                     // Importance score floor
-                    var scoreResult = ImportanceScorer.Score(getter, linkCache, importanceWeights);
+                    var scoreResult = ImportanceScorer.Score(getter, linkCache, importanceWeights, assessment);
                     int floorLevel  = ImportanceScorer.DeriveFloor(scoreResult.Score, assessment.Tier, Settings.WorldMaxLevel);
                     int finalBase   = Math.Max(baseLevel, floorLevel);
 

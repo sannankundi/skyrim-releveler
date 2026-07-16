@@ -31,6 +31,11 @@ namespace SkyrimReleveler
         [JsonProperty] public float ModOriginUnique    { get; set; } = 0.12f;
         [JsonProperty] public float BossClass          { get; set; } = 0.35f;
         [JsonProperty] public float ActorTypeKeyword   { get; set; } = 0.20f;
+        [JsonProperty] public float HighSkillValue     { get; set; } = 0.18f;
+        [JsonProperty] public float HighVanillaPerks   { get; set; } = 0.12f;
+        [JsonProperty] public float AbsoluteEquipment  { get; set; } = 0.15f;
+        [JsonProperty] public float RelativeEquipment  { get; set; } = 0.22f;
+        [JsonProperty] public float UniqueItem         { get; set; } = 0.25f;
 
         // --- numeric thresholds ---
         [JsonProperty] public int CalcMinLevelThreshold  { get; set; } = 50;
@@ -38,6 +43,10 @@ namespace SkyrimReleveler
         [JsonProperty] public int FactionRankThreshold   { get; set; } = 2;
         [JsonProperty] public int MinFactionCount        { get; set; } = 3;
         [JsonProperty] public int MinKeywordCount        { get; set; } = 5;
+        [JsonProperty] public int HighSkillThreshold     { get; set; } = 75;
+        [JsonProperty] public int HighPerkCountThreshold { get; set; } = 5;
+        [JsonProperty] public float AbsoluteEquipThreshold { get; set; } = 0.5f;
+        [JsonProperty] public float RelativeEquipRatio   { get; set; } = 1.5f;
 
         // --- review thresholds ---
         [JsonProperty] public float LowConfidenceThreshold { get; set; } = 0.5f;
@@ -85,6 +94,20 @@ namespace SkyrimReleveler
             "ActorTypeDLC1Boss", "ActorTypeSpirit"
         };
 
+        // Item EditorID substrings that indicate a unique/artifact item
+        [JsonProperty] public List<string> UniqueItemKeywords { get; set; } = new()
+        {
+            "Volendrung","Wuuthrad","EbonyBlade","MaceofMolagBal","SkullofdCorruption",
+            "Dawnbreaker","Mehrunes","AzurasStarBlack","AzurasStar","Nightingale",
+            "Chillrend","DragonboneMace","DragonboneSword","DragonboneGreatSword",
+            "DragonboneWarAxe","DragonboneBattleAxe","DragonboneDagger","DragonboneBow",
+            "Harkon","HaknirDeathBrand","AhzidalArmor","StalhrimBoss",
+            "DLC2_Stalhrim","MolagBal","Auriel","EbonyMailCuirass",
+            "GauldurAmulet","WhiterunSword","Windshear","Targe",
+            "Longhammer","ValdrLucky","PaarthurnaxMedallion","HircinesRing",
+            "SaviorHide","Namira","Clavicus","SkaalArmor","Karstaag"
+        };
+
         // --- contradiction pairs ---
         [JsonProperty] public List<ContradictionPair> ContradictionPairs { get; set; } = new()
         {
@@ -115,6 +138,11 @@ namespace SkyrimReleveler
             SanitizeField(nameof(ModOriginUnique),  ModOriginUnique,  v => ModOriginUnique  = v);
             SanitizeField(nameof(BossClass),        BossClass,        v => BossClass        = v);
             SanitizeField(nameof(ActorTypeKeyword), ActorTypeKeyword, v => ActorTypeKeyword = v);
+            SanitizeField(nameof(HighSkillValue),   HighSkillValue,   v => HighSkillValue   = v);
+            SanitizeField(nameof(HighVanillaPerks), HighVanillaPerks, v => HighVanillaPerks = v);
+            SanitizeField(nameof(AbsoluteEquipment),AbsoluteEquipment,v => AbsoluteEquipment= v);
+            SanitizeField(nameof(RelativeEquipment),RelativeEquipment,v => RelativeEquipment= v);
+            SanitizeField(nameof(UniqueItem),       UniqueItem,       v => UniqueItem       = v);
         }
 
         private static void SanitizeField(string name, float value, Action<float> setter)

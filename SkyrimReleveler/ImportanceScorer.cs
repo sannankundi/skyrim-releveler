@@ -56,7 +56,7 @@ namespace SkyrimReleveler
         /// Evaluates all active signals against <paramref name="npc"/> and returns a
         /// normalised ScoreResult. Guards against an empty signal list (returns Score 0).
         /// </summary>
-        public static ScoreResult Score(INpcGetter npc, ILinkCache linkCache, ImportanceWeights weights)
+        public static ScoreResult Score(INpcGetter npc, ILinkCache linkCache, ImportanceWeights weights, NpcAssessment? assessment = null)
         {
             // Resolve class once — used for child suppression and boss elevation
             string? classId = null;
@@ -100,6 +100,47 @@ namespace SkyrimReleveler
             }
 
             float score = denominator > 0f
+                ? Math.Clamp(numerator / denominator, 0f, 1f)
+                : 0f;
+
+            // --- Assessment-based signals (inline, need pre-computed peer data) ---
+            if (assessment is not null)
+            {
+                void AddAssessment(string name, float raw, float weight)
+                {
+                    if (weight == 0f) return;
+                    numerator   += raw * weight;
+                    denominator += weight;
+                    if (raw > 0f) firedNames.Add(name);
+                }
+
+                // HighSkillValue: any vanilla skill ≥ threshold
+                float skillRaw = assessment.MaxSkillValue >= weights.HighSkillThreshold ? 1f : 0f;
+                AddAssessment("HighSkillValue", skillRaw, weights.HighSkillValue);
+
+                // HighVanillaPerks: vanilla perk count ≥ threshold
+                float perkRaw = assessment.VanillaPerkCount >= weights.HighPerkCountThreshold ? 1f : 0f;
+                AddAssessment("HighVanillaPerks", perkRaw, weights.HighVanillaPerks);
+
+                // AbsoluteEquipment: equipment score ≥ threshold
+                float absEquip = assessment.EquipmentScore >= weights.AbsoluteEquipThreshold ? 1f : 0f;
+                AddAssessment("AbsoluteEquip", absEquip, weights.AbsoluteEquipment);
+
+                // RelativeEquipment: NPC's equipment score ≥ ratio × peer average
+                if (assessment.PeerAvgEquipScore > 0f)
+                {
+                    float ratio = assessment.EquipmentScore / assessment.PeerAvgEquipScore;
+                    float relEquip = ratio >= weights.RelativeEquipRatio ? Math.Clamp((ratio - 1f) / 2f, 0f, 1f) : 0f;
+                    AddAssessment("RelativeEquip", relEquip, weights.RelativeEquipment);
+                }
+
+                // UniqueItem: check if NPC carries a unique item (EditorID in UniqueItemKeywords or UESP known uniques)
+                float uniqueItem = HasUniqueItem(npc, linkCache, weights) ? 1f : 0f;
+                AddAssessment("UniqueItem", uniqueItem, weights.UniqueItem);
+            }
+
+            // Re-normalize after inline additions
+            score = denominator > 0f
                 ? Math.Clamp(numerator / denominator, 0f, 1f)
                 : 0f;
 
@@ -263,6 +304,33 @@ namespace SkyrimReleveler
                         return 1f;
             }
             return 0f;
+        }
+
+        private static bool HasUniqueItem(INpcGetter npc, ILinkCache lc, ImportanceWeights w)
+        {
+            var items = npc.Items;
+            if (items is not null)
+                foreach (var entry in items)
+                {
+                    var item = entry.Item.Item.TryResolve(lc);
+                    if (item?.EditorID is not { } eid) continue;
+                    foreach (var kw in w.UniqueItemKeywords)
+                        if (eid.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                            return true;
+                }
+
+            var outfit = npc.DefaultOutfit.TryResolve(lc);
+            if (outfit?.Items is not null)
+                foreach (var entry in outfit.Items)
+                {
+                    var outfitItem = entry.TryResolve(lc);
+                    if (outfitItem?.EditorID is not { } oeid) continue;
+                    foreach (var kw in w.UniqueItemKeywords)
+                        if (oeid.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                            return true;
+                }
+
+            return false;
         }
     }
 }
