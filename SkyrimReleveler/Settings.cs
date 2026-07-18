@@ -148,7 +148,7 @@ namespace SkyrimReleveler
         // -------------------------------------------------------------------------
         // Weapon / armor stat multipliers
         // -------------------------------------------------------------------------
-        [Tooltip("Multiplier applied to every weapon's base damage. 1.0 = no change. Example: vanilla damage 10 × 2.0 = 20. Set to 1.0 to disable.")]
+        [Tooltip("Multiplier applied to every weapon's base damage, including unique and bound weapons. 1.0 = no change. Example: vanilla damage 10 × 2.0 = 20. Set to 1.0 to disable.")]
         public float WeaponDamageMultiplier { get; set; } = 1.0f;
 
         [Tooltip("Multiplier applied to every heavy armor piece's armor rating. 1.0 = no change. Example: vanilla rating 100 × 1.5 = 150. Set to 1.0 to disable.")]
@@ -156,6 +156,12 @@ namespace SkyrimReleveler
 
         [Tooltip("Multiplier applied to every light armor piece's armor rating. 1.0 = no change. Example: vanilla rating 60 × 1.5 = 90. Set to 1.0 to disable.")]
         public float LightArmorRatingMultiplier { get; set; } = 1.0f;
+
+        [Tooltip("Multiplier applied to every shield's armor rating. 1.0 = no change. Example: vanilla rating 20 × 2.0 = 40. Set to 1.0 to disable.")]
+        public float ShieldArmorRatingMultiplier { get; set; } = 1.0f;
+
+        [Tooltip("Multiplier applied to every ammo record's damage (arrows, bolts, etc.). 1.0 = no change. Example: vanilla damage 10 × 2.0 = 20. Set to 1.0 to disable.")]
+        public float AmmoDamageMultiplier { get; set; } = 1.0f;
 
         // -------------------------------------------------------------------------
         // Boss keyword bonus

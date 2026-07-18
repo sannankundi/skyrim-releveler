@@ -1599,8 +1599,6 @@ namespace SkyrimReleveler
                     state.PatchMod.Npcs.Set(npcCopy);
 
                 ++npcsProcessed;
-                if (npcsProcessed % 2000 == 0)
-                    Console.WriteLine($"  ... {npcsProcessed} NPCs processed");
             }
 
             DisableExtraDamagePerks(state);

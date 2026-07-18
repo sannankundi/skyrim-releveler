@@ -6,53 +6,45 @@ using Mutagen.Bethesda.FormKeys.SkyrimSE;
 namespace SkyrimReleveler
 {
     /// <summary>
-    /// Applies global multipliers to weapon damage and armor ratings.
-    /// Logic: finalValue = Round(vanillaValue * multiplier), clamped to valid range.
-    /// A multiplier of 1.0 is a no-op — nothing is patched.
+    /// Applies global multipliers to weapon damage and armor/shield ratings.
+    /// Logic: finalValue = Round(vanillaValue * multiplier), clamped to [0, 60000].
+    /// Any multiplier of exactly 1.0 is a no-op — that category is skipped entirely.
     /// </summary>
     public static class StatScalerPatcher
     {
-        /// <summary>
-        /// Entry point called from RunPatch after NPC processing is complete.
-        /// </summary>
         public static void Run(IPatcherState<ISkyrimMod, ISkyrimModGetter> state, Settings settings)
         {
-            bool patchWeapons = Math.Abs(settings.WeaponDamageMultiplier      - 1.0f) > 0.0001f;
-            bool patchHeavy   = Math.Abs(settings.HeavyArmorRatingMultiplier  - 1.0f) > 0.0001f;
-            bool patchLight   = Math.Abs(settings.LightArmorRatingMultiplier  - 1.0f) > 0.0001f;
+            bool patchWeapons = Math.Abs(settings.WeaponDamageMultiplier       - 1.0f) > 0.0001f;
+            bool patchHeavy   = Math.Abs(settings.HeavyArmorRatingMultiplier   - 1.0f) > 0.0001f;
+            bool patchLight   = Math.Abs(settings.LightArmorRatingMultiplier   - 1.0f) > 0.0001f;
+            bool patchShield  = Math.Abs(settings.ShieldArmorRatingMultiplier  - 1.0f) > 0.0001f;
+            bool patchAmmo    = Math.Abs(settings.AmmoDamageMultiplier         - 1.0f) > 0.0001f;
 
-            if (!patchWeapons && !patchHeavy && !patchLight)
+            if (!patchWeapons && !patchHeavy && !patchLight && !patchShield && !patchAmmo)
             {
                 Console.WriteLine("  StatScaler: all multipliers are 1.0 — skipping weapon/armor patching.");
                 return;
             }
 
-            int weaponsPatched = 0;
-            int heavyPatched   = 0;
-            int lightPatched   = 0;
-
             // -----------------------------------------------------------------------
             // Weapons — scale BasicStats.Damage
+            // Includes unique weapons AND bound weapons (no skips based on flags/template).
+            // Only skips weapons with 0 damage (staves, torches, etc. stored as weapons).
             // -----------------------------------------------------------------------
             if (patchWeapons)
             {
                 float mult = settings.WeaponDamageMultiplier;
                 Console.WriteLine($"  StatScaler: applying weapon damage multiplier ×{mult:F4}");
 
+                int patched = 0;
                 foreach (var weaponGetter in state.LoadOrder.PriorityOrder.Weapon().WinningOverrides())
                 {
-                    // Skip non-playable weapons — they have no meaningful damage to scale
-                    if (weaponGetter.Data?.Flags.HasFlag(WeaponData.Flag.NonPlayable) == true)
-                        continue;
-
-                    // Skip template weapons — they inherit stats from their template
-                    if (weaponGetter.Template?.FormKey is { } tKey && !tKey.IsNull)
-                        continue;
-
                     if (weaponGetter.BasicStats == null)
                         continue;
 
                     ushort originalDamage = weaponGetter.BasicStats.Damage;
+
+                    // 0-damage records are staves, torches, or placeholders — skip them
                     if (originalDamage == 0)
                         continue;
 
@@ -60,55 +52,65 @@ namespace SkyrimReleveler
                     if (newDamage == originalDamage)
                         continue;
 
-                    // DeepCopy + Set is the correct Mutagen pattern for this version
                     var weaponOverride = weaponGetter.DeepCopy();
                     weaponOverride.BasicStats!.Damage = newDamage;
                     state.PatchMod.Weapons.Set(weaponOverride);
-                    weaponsPatched++;
+                    patched++;
                 }
 
-                Console.WriteLine($"  StatScaler: {weaponsPatched} weapons patched.");
+                Console.WriteLine($"  StatScaler: {patched} weapons patched.");
             }
 
             // -----------------------------------------------------------------------
-            // Armor — scale ArmorRating, split by Heavy/Light keyword
+            // Armor and Shields — scale ArmorRating
+            // Shields use the ArmorShield keyword and are Armor records in Skyrim's data.
+            // Heavy/Light armor is identified by ArmorHeavy / ArmorLight keywords.
+            // A single record can only be one type; shields are checked first.
             // -----------------------------------------------------------------------
-            if (patchHeavy || patchLight)
+            if (patchHeavy || patchLight || patchShield)
             {
-                float heavyMult = settings.HeavyArmorRatingMultiplier;
-                float lightMult = settings.LightArmorRatingMultiplier;
+                float heavyMult  = settings.HeavyArmorRatingMultiplier;
+                float lightMult  = settings.LightArmorRatingMultiplier;
+                float shieldMult = settings.ShieldArmorRatingMultiplier;
 
-                if (patchHeavy) Console.WriteLine($"  StatScaler: applying heavy armor rating multiplier ×{heavyMult:F4}");
-                if (patchLight) Console.WriteLine($"  StatScaler: applying light armor rating multiplier ×{lightMult:F4}");
+                if (patchHeavy)  Console.WriteLine($"  StatScaler: applying heavy armor rating multiplier ×{heavyMult:F4}");
+                if (patchLight)  Console.WriteLine($"  StatScaler: applying light armor rating multiplier ×{lightMult:F4}");
+                if (patchShield) Console.WriteLine($"  StatScaler: applying shield armor rating multiplier ×{shieldMult:F4}");
 
-                var linkCache = state.LoadOrder.PriorityOrder.ToImmutableLinkCache();
+                int heavyPatched  = 0;
+                int lightPatched  = 0;
+                int shieldPatched = 0;
 
                 foreach (var armorGetter in state.LoadOrder.PriorityOrder.Armor().WinningOverrides())
                 {
-                    // Resolve keywords to determine armor type
-                    bool isHeavy = false;
-                    bool isLight = false;
-
-                    if (armorGetter.Keywords != null)
-                    {
-                        foreach (var kwLink in armorGetter.Keywords)
-                        {
-                            if (kwLink.Equals(Skyrim.Keyword.ArmorHeavy)) { isHeavy = true; break; }
-                            if (kwLink.Equals(Skyrim.Keyword.ArmorLight)) { isLight = true; break; }
-                        }
-                    }
-
-                    if (!isHeavy && !isLight)
-                        continue;
-
-                    float mult       = isHeavy ? heavyMult : lightMult;
-                    bool shouldPatch = isHeavy ? patchHeavy : patchLight;
-
-                    if (!shouldPatch)
+                    if (armorGetter.Keywords == null)
                         continue;
 
                     float originalRating = armorGetter.ArmorRating;
                     if (originalRating <= 0f)
+                        continue;
+
+                    // Determine type — shield takes priority over heavy/light
+                    bool isShield = false;
+                    bool isHeavy  = false;
+                    bool isLight  = false;
+
+                    foreach (var kwLink in armorGetter.Keywords)
+                    {
+                        if      (kwLink.Equals(Skyrim.Keyword.ArmorShield)) { isShield = true; break; }
+                        else if (kwLink.Equals(Skyrim.Keyword.ArmorHeavy))  { isHeavy  = true; }
+                        else if (kwLink.Equals(Skyrim.Keyword.ArmorLight))  { isLight  = true; }
+                    }
+
+                    float mult;
+                    bool  shouldPatch;
+
+                    if (isShield)       { mult = shieldMult; shouldPatch = patchShield; }
+                    else if (isHeavy)   { mult = heavyMult;  shouldPatch = patchHeavy;  }
+                    else if (isLight)   { mult = lightMult;  shouldPatch = patchLight;  }
+                    else continue; // clothing or untyped — skip
+
+                    if (!shouldPatch)
                         continue;
 
                     float newRating = ClampFloat((float)Math.Round(originalRating * mult));
@@ -119,12 +121,48 @@ namespace SkyrimReleveler
                     armorOverride.ArmorRating = newRating;
                     state.PatchMod.Armors.Set(armorOverride);
 
-                    if (isHeavy) heavyPatched++;
-                    else         lightPatched++;
+                    if      (isShield) shieldPatched++;
+                    else if (isHeavy)  heavyPatched++;
+                    else               lightPatched++;
                 }
 
-                if (patchHeavy) Console.WriteLine($"  StatScaler: {heavyPatched} heavy armor pieces patched.");
-                if (patchLight) Console.WriteLine($"  StatScaler: {lightPatched} light armor pieces patched.");
+                if (patchHeavy)  Console.WriteLine($"  StatScaler: {heavyPatched}  heavy armor pieces patched.");
+                if (patchLight)  Console.WriteLine($"  StatScaler: {lightPatched}  light armor pieces patched.");
+                if (patchShield) Console.WriteLine($"  StatScaler: {shieldPatched} shields patched.");
+            }
+
+            // -----------------------------------------------------------------------
+            // Ammo — scale Damage (arrows, bolts, etc.)
+            // Flags and Damage are direct properties on IAmmunitionGetter.
+            // Non-playable records (internal engine placeholders) are skipped.
+            // -----------------------------------------------------------------------
+            if (patchAmmo)
+            {
+                float mult = settings.AmmoDamageMultiplier;
+                Console.WriteLine($"  StatScaler: applying ammo damage multiplier ×{mult:F4}");
+
+                int patched = 0;
+                foreach (var ammoGetter in state.LoadOrder.PriorityOrder.Ammunition().WinningOverrides())
+                {
+                    // Skip non-playable ammo (engine placeholders, etc.)
+                    if (ammoGetter.Flags.HasFlag(Ammunition.Flag.NonPlayable))
+                        continue;
+
+                    float originalDamage = ammoGetter.Damage;
+                    if (originalDamage <= 0f)
+                        continue;
+
+                    float newDamage = ClampFloat((float)Math.Round(originalDamage * mult, 2));
+                    if (Math.Abs(newDamage - originalDamage) < 0.001f)
+                        continue;
+
+                    var ammoOverride = ammoGetter.DeepCopy();
+                    ammoOverride.Damage = newDamage;
+                    state.PatchMod.Ammunitions.Set(ammoOverride);
+                    patched++;
+                }
+
+                Console.WriteLine($"  StatScaler: {patched} ammo records patched.");
             }
         }
 
