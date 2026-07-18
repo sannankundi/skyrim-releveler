@@ -1390,14 +1390,21 @@ namespace SkyrimReleveler
                 var (tMin, tMax) = TierSystem.GetRange(tier, Settings.WorldMaxLevel);
                 int effLvl = a.EffectiveLevel ?? 0;
 
+                // CalcMaxLevel floor — the author's intended ceiling becomes our minimum
+                // Use CalcMax directly as source if it's set and higher than EffectiveLevel
+                int calcMaxFloor = a.CalcMax > 0 ? a.CalcMax : 0;
+                // When CalcMax is set, use it as the source level for peer mapping
+                // so the result is always ≥ what the author intended
+                int sourceLvl = calcMaxFloor > 0 ? Math.Max(effLvl, calcMaxFloor) : effLvl;
+
                 decimal baseLevel;
                 string mode;
 
                 // PATH 1: largest hostile faction with enough members
                 if (a.FactionKey is not null && factionSourceRange.TryGetValue(a.FactionKey, out var fsr))
                 {
-                    int clamped = Math.Clamp(effLvl > 0 ? effLvl : fsr.Min, fsr.Min, fsr.Max);
-                    baseLevel = effLvl > 0
+                    int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : fsr.Min, fsr.Min, fsr.Max);
+                    baseLevel = sourceLvl > 0
                         ? MapLevel(clamped, fsr.Min, fsr.Max, tMin, tMax)
                         : Math.Round((tMin + tMax) / 2m);
                     mode = $"faction({a.FactionKey}) src=[{fsr.Min},{fsr.Max}]";
@@ -1405,8 +1412,8 @@ namespace SkyrimReleveler
                 // PATH 2: race peers
                 else if (raceSourceRange.TryGetValue(a.RaceFormKey, out var rsr))
                 {
-                    int clamped = Math.Clamp(effLvl > 0 ? effLvl : rsr.Min, rsr.Min, rsr.Max);
-                    baseLevel = effLvl > 0
+                    int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : rsr.Min, rsr.Min, rsr.Max);
+                    baseLevel = sourceLvl > 0
                         ? MapLevel(clamped, rsr.Min, rsr.Max, tMin, tMax)
                         : Math.Round((tMin + tMax) / 2m);
                     mode = $"race src=[{rsr.Min},{rsr.Max}]";
@@ -1418,8 +1425,8 @@ namespace SkyrimReleveler
                     string stemKey = $"{tier}|{stem}";
                     if (stemSourceRange.TryGetValue(stemKey, out var ssr))
                     {
-                        int clamped = Math.Clamp(effLvl > 0 ? effLvl : ssr.Min, ssr.Min, ssr.Max);
-                        baseLevel = effLvl > 0
+                        int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : ssr.Min, ssr.Min, ssr.Max);
+                        baseLevel = sourceLvl > 0
                             ? MapLevel(clamped, ssr.Min, ssr.Max, tMin, tMax)
                             : Math.Round((tMin + tMax) / 2m);
                         mode = $"stem({stem}) src=[{ssr.Min},{ssr.Max}]";
@@ -1439,8 +1446,8 @@ namespace SkyrimReleveler
 
                         if (matchedPrefix is not null)
                         {
-                            int clamped = Math.Clamp(effLvl > 0 ? effLvl : psr.Min, psr.Min, psr.Max);
-                            baseLevel = effLvl > 0
+                            int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : psr.Min, psr.Min, psr.Max);
+                            baseLevel = sourceLvl > 0
                                 ? MapLevel(clamped, psr.Min, psr.Max, tMin, tMax)
                                 : Math.Round((tMin + tMax) / 2m);
                             mode = $"prefix({matchedPrefix}) src=[{psr.Min},{psr.Max}]";
@@ -1456,7 +1463,11 @@ namespace SkyrimReleveler
                 if (Settings.PrintDebugOutput)
                     Console.WriteLine($"  {a.EditorId}: tier {tier} ({TierSystem.GetName(tier)}) [{tMin},{tMax}] via {mode} -> base {baseLevel}");
 
-                return (short)Math.Clamp(baseLevel, tMin, tMax);
+                // Apply CalcMaxLevel as floor — result must never be below the author's intended ceiling
+                short result = (short)Math.Clamp(baseLevel, tMin, tMax);
+                if (calcMaxFloor > 0 && result < calcMaxFloor)
+                    result = (short)Math.Min(calcMaxFloor, short.MaxValue);
+                return result;
             }
 
             // -----------------------------------------------------------------------

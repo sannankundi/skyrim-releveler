@@ -40,7 +40,6 @@
 
 	"Harkon":                    1000,
 	"Valerica":                  640,
-	"VyrthurArchCurate":         760,
 	"Lokil":                     480,
 	"Malkus":                    480,
 	"Orthjolf":                  480,
@@ -226,5 +225,6 @@
 	"OriniDral":                 360,
 	"GrogmargroBurzog":          400,
 	"OldOrc":                    440,
-	"zmZannen":                  800
+	"zmZannen":                  800,
+	"DLC1AlthadanVyrthur": 760
 }
