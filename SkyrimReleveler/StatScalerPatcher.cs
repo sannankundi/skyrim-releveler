@@ -6,19 +6,24 @@ using Mutagen.Bethesda.FormKeys.SkyrimSE;
 namespace SkyrimReleveler
 {
     /// <summary>
-    /// Applies global multipliers to weapon damage and armor/shield ratings.
+    /// Applies global multipliers to weapon damage, armor/shield ratings, and ammo damage.
     /// Logic: finalValue = Round(vanillaValue * multiplier), clamped to [0, 60000].
     /// Any multiplier of exactly 1.0 is a no-op — that category is skipped entirely.
+    ///
+    /// Uses WinningContextOverrides throughout so every record is fully resolved —
+    /// partial overrides (e.g. USSEP touching only a script flag) never cause a stat
+    /// to be silently skipped. GetOrAddAsOverride on the context writes cleanly to the
+    /// patch mod without duplicating work.
     /// </summary>
     public static class StatScalerPatcher
     {
         public static void Run(IPatcherState<ISkyrimMod, ISkyrimModGetter> state, Settings settings)
         {
-            bool patchWeapons = Math.Abs(settings.WeaponDamageMultiplier       - 1.0f) > 0.0001f;
-            bool patchHeavy   = Math.Abs(settings.HeavyArmorRatingMultiplier   - 1.0f) > 0.0001f;
-            bool patchLight   = Math.Abs(settings.LightArmorRatingMultiplier   - 1.0f) > 0.0001f;
-            bool patchShield  = Math.Abs(settings.ShieldArmorRatingMultiplier  - 1.0f) > 0.0001f;
-            bool patchAmmo    = Math.Abs(settings.AmmoDamageMultiplier         - 1.0f) > 0.0001f;
+            bool patchWeapons = Math.Abs(settings.WeaponDamageMultiplier      - 1.0f) > 0.0001f;
+            bool patchHeavy   = Math.Abs(settings.HeavyArmorRatingMultiplier  - 1.0f) > 0.0001f;
+            bool patchLight   = Math.Abs(settings.LightArmorRatingMultiplier  - 1.0f) > 0.0001f;
+            bool patchShield  = Math.Abs(settings.ShieldArmorRatingMultiplier - 1.0f) > 0.0001f;
+            bool patchAmmo    = Math.Abs(settings.AmmoDamageMultiplier        - 1.0f) > 0.0001f;
 
             if (!patchWeapons && !patchHeavy && !patchLight && !patchShield && !patchAmmo)
             {
@@ -28,37 +33,23 @@ namespace SkyrimReleveler
 
             // -----------------------------------------------------------------------
             // Weapons — scale BasicStats.Damage
-            // Uses WinningContextOverrides so we can resolve the full record via
-            // the link cache when a partial override doesn't include BasicStats.
             // -----------------------------------------------------------------------
             if (patchWeapons)
             {
                 float mult = settings.WeaponDamageMultiplier;
                 Console.WriteLine($"  StatScaler: applying weapon damage multiplier ×{mult:F4}");
 
-                var linkCache = state.LoadOrder.PriorityOrder.ToImmutableLinkCache();
                 int patched = 0;
-
-                foreach (var weaponGetter in state.LoadOrder.PriorityOrder.Weapon().WinningOverrides())
+                foreach (var ctx in state.LoadOrder.PriorityOrder.Weapon().WinningContextOverrides())
                 {
-                    // If the winning override has BasicStats, use it directly.
-                    // If not (partial override), resolve the full record via link cache.
-                    ushort originalDamage;
-                    if (weaponGetter.BasicStats != null)
-                    {
-                        originalDamage = weaponGetter.BasicStats.Damage;
-                    }
-                    else if (linkCache.TryResolve<IWeaponGetter>(weaponGetter.FormKey, out var resolved)
-                             && resolved.BasicStats != null)
-                    {
-                        originalDamage = resolved.BasicStats.Damage;
-                    }
-                    else
-                    {
-                        continue;
-                    }
+                    var weapon = ctx.Record;
 
-                    // 0-damage records are staves, torches, or placeholders — skip them
+                    if (weapon.BasicStats == null)
+                        continue;
+
+                    ushort originalDamage = weapon.BasicStats.Damage;
+
+                    // 0-damage: staves, torches, placeholders
                     if (originalDamage == 0)
                         continue;
 
@@ -66,11 +57,8 @@ namespace SkyrimReleveler
                     if (newDamage == originalDamage)
                         continue;
 
-                    var weaponOverride = weaponGetter.DeepCopy();
-                    // Ensure BasicStats exists on the override before writing
-                    weaponOverride.BasicStats ??= new WeaponBasicStats();
-                    weaponOverride.BasicStats.Damage = newDamage;
-                    state.PatchMod.Weapons.Set(weaponOverride);
+                    var weaponOverride = ctx.GetOrAddAsOverride(state.PatchMod);
+                    weaponOverride.BasicStats!.Damage = newDamage;
                     patched++;
                 }
 
@@ -79,9 +67,7 @@ namespace SkyrimReleveler
 
             // -----------------------------------------------------------------------
             // Armor and Shields — scale ArmorRating
-            // Shields use the ArmorShield keyword and are Armor records in Skyrim's data.
-            // Heavy/Light armor is identified by ArmorHeavy / ArmorLight keywords.
-            // A single record can only be one type; shields are checked first.
+            // Shields: ArmorShield keyword. Heavy/light: ArmorHeavy / ArmorLight.
             // -----------------------------------------------------------------------
             if (patchHeavy || patchLight || patchShield)
             {
@@ -97,12 +83,14 @@ namespace SkyrimReleveler
                 int lightPatched  = 0;
                 int shieldPatched = 0;
 
-                foreach (var armorGetter in state.LoadOrder.PriorityOrder.Armor().WinningOverrides())
+                foreach (var ctx in state.LoadOrder.PriorityOrder.Armor().WinningContextOverrides())
                 {
-                    if (armorGetter.Keywords == null)
+                    var armor = ctx.Record;
+
+                    if (armor.Keywords == null)
                         continue;
 
-                    float originalRating = armorGetter.ArmorRating;
+                    float originalRating = armor.ArmorRating;
                     if (originalRating <= 0f)
                         continue;
 
@@ -111,7 +99,7 @@ namespace SkyrimReleveler
                     bool isHeavy  = false;
                     bool isLight  = false;
 
-                    foreach (var kwLink in armorGetter.Keywords)
+                    foreach (var kwLink in armor.Keywords)
                     {
                         if      (kwLink.Equals(Skyrim.Keyword.ArmorShield)) { isShield = true; break; }
                         else if (kwLink.Equals(Skyrim.Keyword.ArmorHeavy))  { isHeavy  = true; }
@@ -121,9 +109,9 @@ namespace SkyrimReleveler
                     float mult;
                     bool  shouldPatch;
 
-                    if (isShield)       { mult = shieldMult; shouldPatch = patchShield; }
-                    else if (isHeavy)   { mult = heavyMult;  shouldPatch = patchHeavy;  }
-                    else if (isLight)   { mult = lightMult;  shouldPatch = patchLight;  }
+                    if      (isShield) { mult = shieldMult; shouldPatch = patchShield; }
+                    else if (isHeavy)  { mult = heavyMult;  shouldPatch = patchHeavy;  }
+                    else if (isLight)  { mult = lightMult;  shouldPatch = patchLight;  }
                     else continue; // clothing or untyped — skip
 
                     if (!shouldPatch)
@@ -133,9 +121,8 @@ namespace SkyrimReleveler
                     if (Math.Abs(newRating - originalRating) < 0.01f)
                         continue;
 
-                    var armorOverride = armorGetter.DeepCopy();
+                    var armorOverride = ctx.GetOrAddAsOverride(state.PatchMod);
                     armorOverride.ArmorRating = newRating;
-                    state.PatchMod.Armors.Set(armorOverride);
 
                     if      (isShield) shieldPatched++;
                     else if (isHeavy)  heavyPatched++;
@@ -149,8 +136,6 @@ namespace SkyrimReleveler
 
             // -----------------------------------------------------------------------
             // Ammo — scale Damage (arrows, bolts, etc.)
-            // Flags and Damage are direct properties on IAmmunitionGetter.
-            // Non-playable records (internal engine placeholders) are skipped.
             // -----------------------------------------------------------------------
             if (patchAmmo)
             {
@@ -158,13 +143,14 @@ namespace SkyrimReleveler
                 Console.WriteLine($"  StatScaler: applying ammo damage multiplier ×{mult:F4}");
 
                 int patched = 0;
-                foreach (var ammoGetter in state.LoadOrder.PriorityOrder.Ammunition().WinningOverrides())
+                foreach (var ctx in state.LoadOrder.PriorityOrder.Ammunition().WinningContextOverrides())
                 {
-                    // Skip non-playable ammo (engine placeholders, etc.)
-                    if (ammoGetter.Flags.HasFlag(Ammunition.Flag.NonPlayable))
+                    var ammo = ctx.Record;
+
+                    if (ammo.Flags.HasFlag(Ammunition.Flag.NonPlayable))
                         continue;
 
-                    float originalDamage = ammoGetter.Damage;
+                    float originalDamage = ammo.Damage;
                     if (originalDamage <= 0f)
                         continue;
 
@@ -172,9 +158,8 @@ namespace SkyrimReleveler
                     if (Math.Abs(newDamage - originalDamage) < 0.001f)
                         continue;
 
-                    var ammoOverride = ammoGetter.DeepCopy();
+                    var ammoOverride = ctx.GetOrAddAsOverride(state.PatchMod);
                     ammoOverride.Damage = newDamage;
-                    state.PatchMod.Ammunitions.Set(ammoOverride);
                     patched++;
                 }
 
