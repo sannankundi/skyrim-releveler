@@ -1605,6 +1605,11 @@ namespace SkyrimReleveler
 
             DisableExtraDamagePerks(state);
 
+            // -----------------------------------------------------------------------
+            // Weapon damage / armor rating multipliers
+            // -----------------------------------------------------------------------
+            StatScalerPatcher.Run(state, Settings);
+
             Console.WriteLine();
             Console.WriteLine("=== Skyrim Releveler Complete ===");
             Console.WriteLine($"  Total NPCs processed : {npcsProcessed}");
