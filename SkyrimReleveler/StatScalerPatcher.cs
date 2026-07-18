@@ -28,21 +28,35 @@ namespace SkyrimReleveler
 
             // -----------------------------------------------------------------------
             // Weapons — scale BasicStats.Damage
-            // Includes unique weapons AND bound weapons (no skips based on flags/template).
-            // Only skips weapons with 0 damage (staves, torches, etc. stored as weapons).
+            // Uses WinningContextOverrides so we can resolve the full record via
+            // the link cache when a partial override doesn't include BasicStats.
             // -----------------------------------------------------------------------
             if (patchWeapons)
             {
                 float mult = settings.WeaponDamageMultiplier;
                 Console.WriteLine($"  StatScaler: applying weapon damage multiplier ×{mult:F4}");
 
+                var linkCache = state.LoadOrder.PriorityOrder.ToImmutableLinkCache();
                 int patched = 0;
+
                 foreach (var weaponGetter in state.LoadOrder.PriorityOrder.Weapon().WinningOverrides())
                 {
-                    if (weaponGetter.BasicStats == null)
+                    // If the winning override has BasicStats, use it directly.
+                    // If not (partial override), resolve the full record via link cache.
+                    ushort originalDamage;
+                    if (weaponGetter.BasicStats != null)
+                    {
+                        originalDamage = weaponGetter.BasicStats.Damage;
+                    }
+                    else if (linkCache.TryResolve<IWeaponGetter>(weaponGetter.FormKey, out var resolved)
+                             && resolved.BasicStats != null)
+                    {
+                        originalDamage = resolved.BasicStats.Damage;
+                    }
+                    else
+                    {
                         continue;
-
-                    ushort originalDamage = weaponGetter.BasicStats.Damage;
+                    }
 
                     // 0-damage records are staves, torches, or placeholders — skip them
                     if (originalDamage == 0)
@@ -53,7 +67,9 @@ namespace SkyrimReleveler
                         continue;
 
                     var weaponOverride = weaponGetter.DeepCopy();
-                    weaponOverride.BasicStats!.Damage = newDamage;
+                    // Ensure BasicStats exists on the override before writing
+                    weaponOverride.BasicStats ??= new WeaponBasicStats();
+                    weaponOverride.BasicStats.Damage = newDamage;
                     state.PatchMod.Weapons.Set(weaponOverride);
                     patched++;
                 }
