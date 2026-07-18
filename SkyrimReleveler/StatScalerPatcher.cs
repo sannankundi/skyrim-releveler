@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Mutagen.Bethesda;
 using Mutagen.Bethesda.Plugins;
@@ -8,6 +9,8 @@ using Mutagen.Bethesda.Plugins.Records;
 using Mutagen.Bethesda.Synthesis;
 using Mutagen.Bethesda.Skyrim;
 using Mutagen.Bethesda.FormKeys.SkyrimSE;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace SkyrimReleveler
 {
@@ -268,6 +271,14 @@ namespace SkyrimReleveler
 
                 Console.WriteLine($"  StatScaler: {patched} ammo records patched.");
             }
+
+            // -----------------------------------------------------------------------
+            // Explicit item stat overrides — itemStatOverrides.json
+            // Applied LAST, unconditionally, regardless of multiplier settings.
+            // Format: { "weapons": { "XXXXXX:Plugin.esm": { "damage": N } },
+            //           "armor":   { "XXXXXX:Plugin.esm": { "armorRating": N } } }
+            // -----------------------------------------------------------------------
+            ApplyExplicitOverrides(state);
         }
 
         private static ushort ClampUshort(int value) =>
@@ -275,6 +286,120 @@ namespace SkyrimReleveler
 
         private static float ClampFloat(float value) =>
             Math.Max(0f, Math.Min(60000f, value));
+
+        // -----------------------------------------------------------------------
+        // Explicit overrides
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Loads itemStatOverrides.json from the extra settings data folder and
+        /// applies each entry as a hard override, bypassing all multiplier logic.
+        /// Runs after every other patching pass so it always wins.
+        /// </summary>
+        private static void ApplyExplicitOverrides(IPatcherState<ISkyrimMod, ISkyrimModGetter> state)
+        {
+            var overridesPath = Path.Combine(state.ExtraSettingsDataPath ?? "", "itemStatOverrides.json");
+            if (!File.Exists(overridesPath))
+            {
+                Console.WriteLine("  StatScaler: itemStatOverrides.json not found — skipping explicit overrides.");
+                return;
+            }
+
+            JObject root;
+            try
+            {
+                root = JObject.Parse(File.ReadAllText(overridesPath));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  StatScaler: [WARNING] Failed to parse itemStatOverrides.json: {ex.Message}");
+                return;
+            }
+
+            int weaponOverrides = 0;
+            int armorOverrides  = 0;
+
+            // --- Weapon overrides ---
+            var weaponSection = root["weapons"] as JObject;
+            if (weaponSection != null)
+            {
+                foreach (var prop in weaponSection.Properties())
+                {
+                    // Skip comment keys
+                    if (prop.Name.StartsWith("_")) continue;
+
+                    if (!FormKey.TryFactory(prop.Name, out var formKey))
+                    {
+                        Console.WriteLine($"  StatScaler: [WARNING] itemStatOverrides.json — invalid weapon FormKey '{prop.Name}', skipping.");
+                        continue;
+                    }
+
+                    if (!state.LinkCache.TryResolve<IWeaponGetter>(formKey, out var weaponRecord))
+                    {
+                        Console.WriteLine($"  StatScaler: [WARNING] itemStatOverrides.json — weapon FormKey '{prop.Name}' not found in load order, skipping.");
+                        continue;
+                    }
+
+                    var entry = prop.Value as JObject;
+                    if (entry == null) continue;
+
+                    bool changed = false;
+                    var weaponOverride = state.PatchMod.Weapons.GetOrAddAsOverride(weaponRecord);
+
+                    if (entry["damage"] != null && weaponOverride.BasicStats != null)
+                    {
+                        ushort newDamage = ClampUshort((int)entry["damage"]!);
+                        string name = entry["_name"]?.ToString() ?? prop.Name;
+                        Console.WriteLine($"  StatScaler: override '{name}' damage {weaponOverride.BasicStats.Damage} → {newDamage}");
+                        weaponOverride.BasicStats.Damage = newDamage;
+                        changed = true;
+                    }
+
+                    if (changed) weaponOverrides++;
+                }
+            }
+
+            // --- Armor overrides ---
+            var armorSection = root["armor"] as JObject;
+            if (armorSection != null)
+            {
+                foreach (var prop in armorSection.Properties())
+                {
+                    if (prop.Name.StartsWith("_")) continue;
+
+                    if (!FormKey.TryFactory(prop.Name, out var formKey))
+                    {
+                        Console.WriteLine($"  StatScaler: [WARNING] itemStatOverrides.json — invalid armor FormKey '{prop.Name}', skipping.");
+                        continue;
+                    }
+
+                    if (!state.LinkCache.TryResolve<IArmorGetter>(formKey, out var armorRecord))
+                    {
+                        Console.WriteLine($"  StatScaler: [WARNING] itemStatOverrides.json — armor FormKey '{prop.Name}' not found in load order, skipping.");
+                        continue;
+                    }
+
+                    var entry = prop.Value as JObject;
+                    if (entry == null) continue;
+
+                    bool changed = false;
+                    var armorOverride = state.PatchMod.Armors.GetOrAddAsOverride(armorRecord);
+
+                    if (entry["armorRating"] != null)
+                    {
+                        float newRating = ClampFloat((float)entry["armorRating"]!);
+                        string name = entry["_name"]?.ToString() ?? prop.Name;
+                        Console.WriteLine($"  StatScaler: override '{name}' armorRating {armorOverride.ArmorRating} → {newRating}");
+                        armorOverride.ArmorRating = newRating;
+                        changed = true;
+                    }
+
+                    if (changed) armorOverrides++;
+                }
+            }
+
+            Console.WriteLine($"  StatScaler: explicit overrides applied — {weaponOverrides} weapon(s), {armorOverrides} armor(s).");
+        }
 
         /// <summary>
         /// Walks the weapon CNAM (Template) chain and returns the FormKey of the root —

@@ -1,0 +1,13 @@
+{
+  "_comment": "Explicit stat overrides for specific items by FormKey (format: 'XXXXXX:PluginName.esm').",
+  "_comment2": "Weapons use 'damage' (integer). Armor/shields use 'armorRating' (float). Both fields are optional — omit what you don't want to change.",
+  "_comment3": "These overrides are applied AFTER the global multipliers and bypass all other logic.",
+
+  "weapons": {
+    "020080:Dawnguard.esm": { "damage": 24,  "_name": "Auriel's Bow" },
+    "0067CF:Dawnguard.esm": { "damage": 22,  "_name": "Harkon's Sword" }
+  },
+
+  "armor": {
+  }
+}
