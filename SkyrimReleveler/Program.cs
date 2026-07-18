@@ -112,8 +112,6 @@ namespace SkyrimReleveler
         private static Settings Settings => _lazySettings.Value;
         private static readonly Random Rng = new Random(42);
 
-        public static List<string> highPoweredNpcs = new();
-
         private static readonly List<string> CivilianClassTerms = new()
         {
             "smith", "alchem", "enchant", "vendor", "apothec",
@@ -947,11 +945,6 @@ namespace SkyrimReleveler
 
         public static void PrintWarnings()
         {
-            if (highPoweredNpcs.Count > 0)
-            {
-                Console.WriteLine($"Notable named NPCs assigned high levels: {highPoweredNpcs.Count}");
-                foreach (var item in highPoweredNpcs) Console.WriteLine("  " + item);
-            }
         }
 
         // -------------------------------------------------------------------------
@@ -1572,16 +1565,6 @@ namespace SkyrimReleveler
                     }
                     else
                     {
-                        if (newLevel > 100)
-                        {
-                            // Only log named, non-generic NPCs — skip unnamed/template NPCs
-                            string? displayName = getter.Name?.String;
-                            bool isNamed = !string.IsNullOrWhiteSpace(displayName)
-                                && getter.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique)
-                                && !getter.Configuration.Flags.HasFlag(NpcConfiguration.Flag.IsCharGenFacePreset);
-                            if (isNamed)
-                                highPoweredNpcs.Add($"{displayName} [{editorId}] = {newLevel}");
-                        }
                         if (Settings.PrintDebugOutput)
                             Console.WriteLine($"    -> final {newLevel} (offset={Settings.GlobalOffset}, raceMult={rMult}, raceAdd={rAdd}, bonus={bonusPct}%)");
                         ApplyLevel(npcCopy, newLevel);
@@ -1599,6 +1582,8 @@ namespace SkyrimReleveler
                     state.PatchMod.Npcs.Set(npcCopy);
 
                 ++npcsProcessed;
+                if (npcsProcessed % 2000 == 0)
+                    Console.WriteLine($"  ... {npcsProcessed} NPCs processed");
             }
 
             DisableExtraDamagePerks(state);
