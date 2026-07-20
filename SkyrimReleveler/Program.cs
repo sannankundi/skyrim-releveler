@@ -132,6 +132,7 @@ namespace SkyrimReleveler
         public ModKey ModKey { get; set; }
         public bool IsChild { get; set; }
         public bool IsUnique { get; set; }
+        public float LevelMult { get; set; } = 0f; // 0 = fixed level, >0 = PC-mult
     }
 
     public class Program
@@ -182,8 +183,9 @@ namespace SkyrimReleveler
                     float mult  = pcMult.LevelMult;
                     if (calcMax > 0)
                     {
-                        // For unique NPCs with mult > 1.0, the true intended ceiling
-                        // is LevelMult × CalcMax (e.g. Molag Bal: 4.0 × 250 = 1000)
+                        // Only apply LevelMult × CalcMax for unique NPCs with mult > 1.0.
+                        // mult=1.0 NPCs scale 1:1 with player — CalcMax is just a cap,
+                        // not an authored power statement. These are treated like CalcMax only.
                         bool isUnique = npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique);
                         if (isUnique && mult > 1.0f)
                         {
@@ -1329,6 +1331,7 @@ namespace SkyrimReleveler
                                            (clsCheck.EditorID?.Equals(t, StringComparison.OrdinalIgnoreCase) ?? false) ||
                                            (clsCheck.Name?.String?.Equals(t, StringComparison.OrdinalIgnoreCase) ?? false)),
                     IsUnique         = getter.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique),
+                    LevelMult        = getter.Configuration.Level is IPcLevelMultGetter pcm ? pcm.LevelMult : 0f,
                 };
                 // HasPeerGroup is determined after source ranges are built — set below
                 assessments[getter.FormKey] = assessment;
@@ -1559,8 +1562,12 @@ namespace SkyrimReleveler
                 }
                 else if (sourceLvl > tMax)
                 {
-                    // Author explicitly set a level beyond the tier ceiling — respect it
-                    baseLevel = sourceLvl;
+                    // Source level already exceeds the tier ceiling.
+                    // Only respect this for fixed-level or high-mult unique NPCs —
+                    // PC-mult NPCs with mult ≤ 1.0 just have a player-scale cap,
+                    // their CalcMax is not a raw power level.
+                    bool trustHighLevel = a.IsUnique && (a.LevelMult <= 0f || a.LevelMult > 1.0f);
+                    baseLevel = trustHighLevel ? sourceLvl : tMax;
                 }
                 else if (sourceLvl <= vanillaCeiling)
                 {
@@ -1570,9 +1577,14 @@ namespace SkyrimReleveler
                 }
                 else
                 {
-                    // Above vanilla ceiling but still within tier range:
-                    // only unique NPCs get the fading multiplier bonus.
-                    if (a.IsUnique)
+                    // Above vanilla ceiling but still within tier range.
+                    // Multiplier only applies to unique NPCs where the source level
+                    // is genuinely authored as high — i.e. fixed-level NPCs, or
+                    // PC-mult NPCs with mult > 1.0 (truly scaled-up entities).
+                    // PC-mult NPCs with mult ≤ 1.0 just have a player-scale cap —
+                    // their CalcMax is not a power statement, so cap at tMax.
+                    bool canMultiply = a.IsUnique && (a.LevelMult <= 0f || a.LevelMult > 1.0f);
+                    if (canMultiply)
                     {
                         float fadeOutLevel = Settings.MultiplierFadeOutLevel;
                         float maxMult      = Math.Max(1f, Settings.MaxTierMultiplier);
