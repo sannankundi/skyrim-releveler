@@ -1468,9 +1468,7 @@ namespace SkyrimReleveler
             short ComputeLevel(NpcAssessment a)
             {
                 int tier = a.Tier;
-                int scalingBase = tier == 0
-                    ? Settings.WorldMaxLevel
-                    : Math.Min(Settings.TierScalingBase, Settings.WorldMaxLevel);
+                int scalingBase = Settings.TierScalingBase;
                 var (tMin, tMax) = TierSystem.GetRange(tier, scalingBase);
 
                 // ------------------------------------------------------------------
@@ -1700,8 +1698,7 @@ namespace SkyrimReleveler
 
                     // Importance score floor
                     var scoreResult = ImportanceScorer.Score(getter, linkCache, importanceWeights, assessment);
-                    int scalingBaseForFloor = assessment.Tier == 0 ? Settings.WorldMaxLevel : Math.Min(Settings.TierScalingBase, Settings.WorldMaxLevel);
-                    int floorLevel  = ImportanceScorer.DeriveFloor(scoreResult.Score, assessment.Tier, scalingBaseForFloor);
+                    int floorLevel  = ImportanceScorer.DeriveFloor(scoreResult.Score, assessment.Tier, Settings.TierScalingBase);
                     int finalBase   = Math.Max(baseLevel, floorLevel);
                     if (Settings.PrintDebugOutput)
                     {

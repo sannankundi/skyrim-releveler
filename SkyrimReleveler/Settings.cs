@@ -82,10 +82,7 @@ namespace SkyrimReleveler
         // -------------------------------------------------------------------------
         // Auto-leveling system
         // -------------------------------------------------------------------------
-        [Tooltip("The absolute level ceiling assigned to the top of Tier 0 (Cosmic). Molag Bal, Jyggalag, and similar Daedric Prince-level entities map to this value. All tier ranges scale proportionally. Default is 2000.")]
-        public int WorldMaxLevel { get; set; } = 5000;
-
-        [Tooltip("The value used to scale all tier ranges (Tier 1 and below). Keeping this lower than WorldMaxLevel reserves headroom between regular bosses and true Cosmic-tier entities. For example, with WorldMaxLevel=2500 and TierScalingBase=2000, Alduin/Molag Bal can reach 2500 while humanoid enemies and regular bosses scale as if the world cap were 2000. Set equal to WorldMaxLevel to disable this separation. Default is 2000.")]
+        [Tooltip("The value all tier ranges scale against. Tier 0 (Cosmic, Molag Bal / Daedric Prince level) maps to this ceiling. All other tiers scale proportionally below it. Default is 2000.")]
         public int TierScalingBase { get; set; } = 2000;
 
         [Tooltip("Minimum number of NPCs that must share a faction before that faction is used as a peer group for percentile scoring. Factions with fewer members fall back to race-based peer comparison. Default is 3.")]
