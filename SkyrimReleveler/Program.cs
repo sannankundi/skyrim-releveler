@@ -1544,9 +1544,13 @@ namespace SkyrimReleveler
                 }
                 else
                 {
-                    // Linear map: 0→tMin, vanillaCeiling→tMax, capped at tMax
+                    // Linear map: 0→tMin, vanillaCeiling→tMax
+                    // For unique NPCs, allow going above tMax if sourceLvl > vanillaCeiling
+                    // (the fadeT step will control how much bonus they get on top).
+                    // Non-unique NPCs are capped at tMax.
                     decimal t = (decimal)sourceLvl / Math.Max(vanillaCeiling, 1);
-                    best = Math.Round(Math.Min(tMin + t * (tMax - tMin), tMax));
+                    decimal raw = Math.Round(tMin + t * (tMax - tMin));
+                    best = a.IsUnique ? raw : Math.Min(raw, tMax);
                 }
 
                 if (Settings.PrintDebugOutput)
