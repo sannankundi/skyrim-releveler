@@ -87,6 +87,31 @@ namespace SkyrimReleveler
         }
 
         public static string GetName(int tier) => Names[tier];
+
+        // Vanilla level ceilings — the highest original (pre-releveling) level
+        // the game assigns to a generic NPC in each tier. Used as the anchor for
+        // the tier-based base level computation: an NPC whose original level equals
+        // the ceiling maps to the top of the tier range.
+        private static readonly int[] VanillaCeilings = new int[]
+        {
+            150, // 0  Cosmic           — beyond vanilla; set to match our design target
+            100, // 1  World-ender      — Alduin hard cap
+             75, // 2  Dragon           — Ancient/Legendary Dragon (DLC)
+             50, // 3  Dragon Priest    — all 8 named priests locked at 50
+             46, // 4  High Daedra      — Dremora Valkynaz
+             50, // 5  Vampire Lord     — major DLC faction bosses
+             36, // 6  Elite Construct  — Dwarven Centurion Master
+             46, // 7  Falmer/Daedra    — Dremora Valkynaz / Falmer Shadowmaster
+             53, // 8  Vampire/Werewolf — Nightlord Vampire
+             45, // 9  Draugr/Atronach  — Draugr Death Overlord
+             28, // 10 Spriggan/Troll   — Spriggan Earth Mother
+             38, // 11 Dangerous Wildlife — Chaurus Reaper
+             50, // 12 Humanoid Enemy   — master-tier bandits/forsworn
+             20, // 13 Standard Creature
+              8, // 14 Vermin/Passive
+        };
+
+        public static int GetVanillaCeiling(int tier) => VanillaCeilings[tier];
     }
 
     public class NpcAssessment
@@ -104,6 +129,8 @@ namespace SkyrimReleveler
         public FormKey RaceFormKey { get; set; }
         public bool IsModOrigin { get; set; }
         public bool HasPeerGroup { get; set; }
+        public ModKey ModKey { get; set; }
+        public bool IsChild { get; set; }
     }
 
     public class Program
@@ -144,10 +171,21 @@ namespace SkyrimReleveler
             {
                 case INpcLevelGetter fixedLevel when fixedLevel.Level > 0:
                     return fixedLevel.Level;
-                case IPcLevelMultGetter:
-                    if (npc.Configuration.CalcMaxLevel > 0) return npc.Configuration.CalcMaxLevel;
-                    if (npc.Configuration.CalcMinLevel > 0) return npc.Configuration.CalcMinLevel;
+                case IPcLevelMultGetter pcMult:
+                {
+                    int calcMax = npc.Configuration.CalcMaxLevel;
+                    int calcMin = npc.Configuration.CalcMinLevel;
+                    // LevelMult × CalcMaxLevel gives the true intended ceiling
+                    // (e.g. Molag Bal: mult=4.0, calcMax=250 → effective=1000)
+                    float mult = pcMult.LevelMult;
+                    if (calcMax > 0)
+                    {
+                        int multApplied = (mult > 0f) ? (int)Math.Round(mult * calcMax) : calcMax;
+                        return Math.Max(calcMax, multApplied);
+                    }
+                    if (calcMin > 0) return calcMin;
                     return null;
+                }
                 default:
                     return null;
             }
@@ -233,8 +271,51 @@ namespace SkyrimReleveler
             int tier = ClassifyByRaceKeyword(race, raceEditorId);
             tier = ApplyNpcNameOverrides(tier, editorId, npcName);
             tier = ApplyNpcKeywordOverrides(npc, tier, lc);
+            tier = ApplyClassOverrides(npc, tier, lc);
 
             return tier;
+        }
+
+        // Class EditorID tier bump — the class record often encodes archetype info
+        // that the race record doesn't (e.g. a humanoid-race NPC with class
+        // "DremoraClass" or "MolagBalClass" should get Daedra/Cosmic tier).
+        private static int ApplyClassOverrides(INpcGetter npc, int currentTier, ILinkCache lc)
+        {
+            if (!npc.Class.TryResolve(lc, out var cls)) return currentTier;
+            string clsId = cls.EditorID ?? "";
+
+            // Cosmic — Daedric Prince level
+            if (ContainsAny(clsId, "MolagBal", "Jyggalag", "DaedricPrince", "Akatosh",
+                                   "Mehrunes", "Azura", "Boethiah", "Mephala", "Meridia",
+                                   "Nocturnal", "Malacath", "Peryite", "Sanguine", "Sheogorath",
+                                   "Vaermina", "Clavicus", "Namira", "Hircine", "Hermaeus"))
+                return Math.Min(currentTier, 0);
+
+            // World-ender — Alduin, world-scale threats
+            if (ContainsAny(clsId, "Alduin", "WorldEater", "WorldEnder"))
+                return Math.Min(currentTier, 1);
+
+            // Dragon
+            if (ContainsAny(clsId, "Dragon") && !ContainsAny(clsId, "DragonPriest"))
+                return Math.Min(currentTier, 2);
+
+            // Dragon Priest / Ancient Lich
+            if (ContainsAny(clsId, "DragonPriest", "Lich", "AyleidLich", "NecroLich"))
+                return Math.Min(currentTier, 3);
+
+            // High Daedra / Dremora
+            if (ContainsAny(clsId, "Dremora", "Xivilai", "GoldenSaint", "DarkSeducer"))
+                return Math.Min(currentTier, 4);
+
+            // Vampire Lord / Soul Cairn
+            if (ContainsAny(clsId, "VampireLord", "SoulCairn", "IdealMaster"))
+                return Math.Min(currentTier, 5);
+
+            // Elite Construct
+            if (ContainsAny(clsId, "Centurion", "DwarvenCenturion", "DweForgemaster"))
+                return Math.Min(currentTier, 6);
+
+            return currentTier;
         }
 
         private static int ClassifyByRaceKeyword(IRaceGetter? race, string? raceEditorId)
@@ -431,13 +512,15 @@ namespace SkyrimReleveler
 
         // -------------------------------------------------------------------------
         // Civilian detection
-        // Two paths:
-        //   A) Unique humanoid with civilian class term → always civilian
-        //   B) Unique humanoid with a display name and NO qualifying hostile faction
-        //      → named character (3DNPC, EZPG, base game named NPCs, etc.)
-        // Both get PC-scaling with a low random cap.
-        // factionMemberCount may be null during pre-pass A (first count sweep) — in
-        // that case only path A applies.
+        // An NPC is considered a civilian if and only if they have a civilian-type
+        // class — i.e. their class EditorID or name contains a known service/trade
+        // term. This maps to the actual CK distinction: vendor, smith, innkeeper,
+        // etc. classes have service flags set and are never intended as combatants.
+        //
+        // "Named NPC with no faction" is NOT a valid civilian signal — Skyrim has
+        // no ActorTypeCivilian keyword or civilian flag on NPC records, and many
+        // mod-added named bosses have small or unique factions that would be
+        // incorrectly caught by that heuristic.
         // -------------------------------------------------------------------------
         private static bool IsCivilian(INpcGetter npc, ILinkCache lc,
             Dictionary<string, int>? factionMemberCount = null,
@@ -448,7 +531,7 @@ namespace SkyrimReleveler
             if (!npc.Race.TryResolve(lc, out var race)) return false;
             if (!race.HasKeyword(Skyrim.Keyword.ActorTypeNPC)) return false;
 
-            // Path A: civilian class term
+            // Class-term check: civilian class EditorID or name contains a known service term
             if (npc.Class.TryResolve(lc, out var cls))
             {
                 string clsId   = cls.EditorID ?? "";
@@ -457,23 +540,6 @@ namespace SkyrimReleveler
                     clsId.Contains(t, StringComparison.OrdinalIgnoreCase) ||
                     clsName.Contains(t, StringComparison.OrdinalIgnoreCase)))
                     return true;
-            }
-
-            // Path B: named NPC with no meaningful hostile faction
-            if (factionMemberCount is not null && isNonHostile is not null)
-            {
-                // Must have a display name to be a "named character"
-                if (string.IsNullOrWhiteSpace(npc.Name?.String)) return false;
-
-                // If they belong to ANY qualifying hostile faction, they're a combatant
-                foreach (var rankEntry in npc.Factions)
-                {
-                    if (!rankEntry.Faction.TryResolve(lc, out var fac) || fac.EditorID is null) continue;
-                    if (isNonHostile(fac.EditorID)) continue;
-                    if (factionMemberCount.TryGetValue(fac.EditorID, out var cnt) && cnt >= minPeers)
-                        return false; // belongs to a real hostile faction → not civilian
-                }
-                return true; // unique, named, humanoid, no hostile faction → named character
             }
 
             return false;
@@ -1190,6 +1256,7 @@ namespace SkyrimReleveler
             var tierEffLevels = new Dictionary<int, List<int>>();
             var factionEquipScores = new Dictionary<string, List<float>>(StringComparer.OrdinalIgnoreCase);
             var raceEquipScores = new Dictionary<FormKey, List<float>>();
+            var pluginEffLevels = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
@@ -1235,6 +1302,11 @@ namespace SkyrimReleveler
                     IsModOrigin      = getter.FormKey.ModKey != Skyrim.ModKey &&
                                        getter.FormKey.ModKey != Dawnguard.ModKey &&
                                        getter.FormKey.ModKey != Dragonborn.ModKey,
+                    ModKey           = getter.FormKey.ModKey,
+                    IsChild          = getter.Class.TryResolve(linkCache, out var clsCheck) &&
+                                       importanceWeights.ChildClassTokens.Any(t =>
+                                           (clsCheck.EditorID?.Equals(t, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                                           (clsCheck.Name?.String?.Equals(t, StringComparison.OrdinalIgnoreCase) ?? false)),
                 };
                 // HasPeerGroup is determined after source ranges are built — set below
                 assessments[getter.FormKey] = assessment;
@@ -1256,6 +1328,12 @@ namespace SkyrimReleveler
                     if (!tierEffLevels.TryGetValue(tier, out var tl))
                         tierEffLevels[tier] = tl = new List<int>();
                     tl.Add(effLevel.Value);
+
+                    // Plugin peer group — keyed by ModKey + tier
+                    string pluginKey = $"{getter.FormKey.ModKey.FileName}|{tier}";
+                    if (!pluginEffLevels.TryGetValue(pluginKey, out var pgl))
+                        pluginEffLevels[pluginKey] = pgl = new List<int>();
+                    pgl.Add(effLevel.Value);
                 }
 
                 // Accumulate equipment scores for peer average computation
@@ -1355,14 +1433,23 @@ namespace SkyrimReleveler
             foreach (var (tk, lvls) in tierEffLevels)
                 tierSourceRange[tk] = GetTrimmedRange(lvls, cutoff);
 
+            // Plugin peer groups — same mod + same tier, minimum 2 members
+            foreach (var lst in pluginEffLevels.Values) lst.Sort();
+            var pluginSourceRange = new Dictionary<string, (int Min, int Max)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (pk, lvls) in pluginEffLevels)
+                if (lvls.Count >= 2)
+                    pluginSourceRange[pk] = GetTrimmedRange(lvls, cutoff);
+
             foreach (var a in assessments.Values)
             {
                 string stem = GetStem(a.EditorId);
+                string pluginKey = $"{a.ModKey.FileName}|{a.Tier}";
                 a.HasPeerGroup =
                     (a.FactionKey is not null && factionSourceRange.ContainsKey(a.FactionKey)) ||
                     raceSourceRange.ContainsKey(a.RaceFormKey) ||
                     stemSourceRange.ContainsKey($"{a.Tier}|{stem}") ||
-                    GetEditorIdPrefixes(a.EditorId).Any(p => prefixSourceRange.ContainsKey($"{a.Tier}|{p}"));
+                    GetEditorIdPrefixes(a.EditorId).Any(p => prefixSourceRange.ContainsKey($"{a.Tier}|{p}")) ||
+                    pluginSourceRange.ContainsKey(pluginKey);
             }
 
             Console.WriteLine();
@@ -1371,95 +1458,178 @@ namespace SkyrimReleveler
             Console.WriteLine($"  Factions with ranges : {factionSourceRange.Count}");
             Console.WriteLine($"  Stem groups (Path 3) : {stemSourceRange.Count}");
             Console.WriteLine($"  Prefix groups (3b)   : {prefixSourceRange.Count}");
+            Console.WriteLine($"  Plugin groups        : {pluginSourceRange.Count}");
             Console.WriteLine($"  Tiers covered        : {tierSourceRange.Count}");
             Console.WriteLine();
 
             // -----------------------------------------------------------------------
-            // Level computation — faction-first, then race, then tier-global
+            // Level computation — new 8-step design
             // -----------------------------------------------------------------------
             short ComputeLevel(NpcAssessment a)
             {
                 int tier = a.Tier;
-                var (tMin, tMax) = TierSystem.GetRange(tier, Settings.WorldMaxLevel);
-                int effLvl = a.EffectiveLevel ?? 0;
+                int scalingBase = tier == 0
+                    ? Settings.WorldMaxLevel
+                    : Math.Min(Settings.TierScalingBase, Settings.WorldMaxLevel);
+                var (tMin, tMax) = TierSystem.GetRange(tier, scalingBase);
 
-                // CalcMaxLevel floor — the author's intended ceiling becomes our minimum
-                // Use CalcMax directly as source if it's set and higher than EffectiveLevel
-                int calcMaxFloor = a.CalcMax > 0 ? a.CalcMax : 0;
-                // When CalcMax is set, use it as the source level for peer mapping
-                // so the result is always ≥ what the author intended
-                int sourceLvl = calcMaxFloor > 0 ? Math.Max(effLvl, calcMaxFloor) : effLvl;
+                // ------------------------------------------------------------------
+                // STEP 1 — Effective source level
+                // For PC-mult NPCs: max(CalcMax, LevelMult × CalcMax) already
+                // computed in GetEffectiveLevel. Take the best of effLevel and
+                // CalcMax as the source anchor.
+                // ------------------------------------------------------------------
+                int effLvl    = a.EffectiveLevel ?? 0;
+                int calcMax   = a.CalcMax;
+                int sourceLvl = calcMax > 0 ? Math.Max(effLvl, calcMax) : effLvl;
 
+                // ------------------------------------------------------------------
+                // STEP 2 — Tier-based base level (always computed, always the floor)
+                // tierCeiling = vanilla max level for this tier.
+                // If sourceLvl <= ceiling  → linear map [0, ceiling] → [tMin, tMax]
+                // If sourceLvl >  ceiling  → tMax × (sourceLvl / ceiling)  (unbounded)
+                // ------------------------------------------------------------------
+                int vanillaCeiling = TierSystem.GetVanillaCeiling(tier);
                 decimal baseLevel;
-                string mode;
-
-                // PATH 1: largest hostile faction with enough members
-                if (a.FactionKey is not null && factionSourceRange.TryGetValue(a.FactionKey, out var fsr))
+                if (sourceLvl <= 0)
                 {
-                    int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : fsr.Min, fsr.Min, fsr.Max);
-                    baseLevel = sourceLvl > 0
-                        ? MapLevel(clamped, fsr.Min, fsr.Max, tMin, tMax)
-                        : Math.Round((tMin + tMax) / 2m);
-                    mode = $"faction({a.FactionKey}) src=[{fsr.Min},{fsr.Max}]";
+                    // No source level at all — place at tier minimum
+                    baseLevel = tMin;
                 }
-                // PATH 2: race peers
-                else if (raceSourceRange.TryGetValue(a.RaceFormKey, out var rsr))
+                else if (sourceLvl <= vanillaCeiling)
                 {
-                    int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : rsr.Min, rsr.Min, rsr.Max);
-                    baseLevel = sourceLvl > 0
-                        ? MapLevel(clamped, rsr.Min, rsr.Max, tMin, tMax)
-                        : Math.Round((tMin + tMax) / 2m);
-                    mode = $"race src=[{rsr.Min},{rsr.Max}]";
+                    // Linear map: 0 → tMin, vanillaCeiling → tMax
+                    decimal t = (decimal)sourceLvl / vanillaCeiling;
+                    baseLevel = Math.Round(tMin + t * (tMax - tMin));
                 }
-                // PATH 3: EditorID stem group (within same tier, ≥5 members)
                 else
                 {
-                    string stem = GetStem(a.EditorId);
+                    // Multiplier: above-ceiling NPCs scale beyond the tier range
+                    decimal multiplier = (decimal)sourceLvl / vanillaCeiling;
+                    baseLevel = Math.Round(tMax * multiplier);
+                }
+
+                if (Settings.PrintDebugOutput)
+                    Console.WriteLine($"  {a.EditorId}: tier={tier}({TierSystem.GetName(tier)}) src={sourceLvl} ceil={vanillaCeiling} [{tMin},{tMax}] base={baseLevel}");
+
+                decimal best = baseLevel; // floor — nothing can go below this
+
+                // ------------------------------------------------------------------
+                // STEP 3 — Race peer mapping (always runs, raises floor)
+                // ------------------------------------------------------------------
+                if (raceSourceRange.TryGetValue(a.RaceFormKey, out var rsr) && sourceLvl > 0)
+                {
+                    int clamped = Math.Clamp(sourceLvl, rsr.Min, rsr.Max);
+                    decimal raceMapped = MapLevel(clamped, rsr.Min, rsr.Max, tMin, tMax);
+                    if (raceMapped > best)
+                    {
+                        best = raceMapped;
+                        if (Settings.PrintDebugOutput)
+                            Console.WriteLine($"    race peers [{rsr.Min},{rsr.Max}] -> {raceMapped}");
+                    }
+                }
+
+                // ------------------------------------------------------------------
+                // STEP 4 — Faction peer mapping (only if sourceLvl <= 100)
+                // ------------------------------------------------------------------
+                if (sourceLvl <= 100 &&
+                    a.FactionKey is not null &&
+                    factionSourceRange.TryGetValue(a.FactionKey, out var fsr))
+                {
+                    int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : fsr.Min, fsr.Min, fsr.Max);
+                    decimal facMapped = sourceLvl > 0
+                        ? MapLevel(clamped, fsr.Min, fsr.Max, tMin, tMax)
+                        : Math.Round((tMin + tMax) / 2m);
+                    if (facMapped > best)
+                    {
+                        best = facMapped;
+                        if (Settings.PrintDebugOutput)
+                            Console.WriteLine($"    faction({a.FactionKey}) [{fsr.Min},{fsr.Max}] -> {facMapped}");
+                    }
+                }
+
+                // ------------------------------------------------------------------
+                // STEP 5 — Stem peer mapping (only if sourceLvl <= 100)
+                // ------------------------------------------------------------------
+                if (sourceLvl <= 100)
+                {
+                    string stem    = GetStem(a.EditorId);
                     string stemKey = $"{tier}|{stem}";
                     if (stemSourceRange.TryGetValue(stemKey, out var ssr))
                     {
                         int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : ssr.Min, ssr.Min, ssr.Max);
-                        baseLevel = sourceLvl > 0
+                        decimal stemMapped = sourceLvl > 0
                             ? MapLevel(clamped, ssr.Min, ssr.Max, tMin, tMax)
                             : Math.Round((tMin + tMax) / 2m);
-                        mode = $"stem({stem}) src=[{ssr.Min},{ssr.Max}]";
-                    }
-                    // PATH 4: equipment score within tier range (pure fallback)
-                    else
-                    {
-                        // PATH 3b: longest EditorID token-prefix group (≥ minPeers, within tier)
-                        (int Min, int Max) psr = default;
-                        string? matchedPrefix = null;
-                        foreach (var prefix in GetEditorIdPrefixes(a.EditorId))
+                        if (stemMapped > best)
                         {
-                            string pk = $"{tier}|{prefix}";
-                            if (prefixSourceRange.TryGetValue(pk, out psr))
-                            { matchedPrefix = prefix; break; }
+                            best = stemMapped;
+                            if (Settings.PrintDebugOutput)
+                                Console.WriteLine($"    stem({stem}) [{ssr.Min},{ssr.Max}] -> {stemMapped}");
                         }
+                    }
 
-                        if (matchedPrefix is not null)
+                    // STEP 5b — Prefix peer mapping
+                    foreach (var prefix in GetEditorIdPrefixes(a.EditorId))
+                    {
+                        string pk = $"{tier}|{prefix}";
+                        if (prefixSourceRange.TryGetValue(pk, out var psr))
                         {
                             int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : psr.Min, psr.Min, psr.Max);
-                            baseLevel = sourceLvl > 0
+                            decimal prefMapped = sourceLvl > 0
                                 ? MapLevel(clamped, psr.Min, psr.Max, tMin, tMax)
                                 : Math.Round((tMin + tMax) / 2m);
-                            mode = $"prefix({matchedPrefix}) src=[{psr.Min},{psr.Max}]";
-                        }
-                        else
-                        {
-                            baseLevel = Math.Round(tMin + (decimal)a.EquipmentScore * (tMax - tMin));
-                            mode = "equipment-score";
+                            if (prefMapped > best)
+                            {
+                                best = prefMapped;
+                                if (Settings.PrintDebugOutput)
+                                    Console.WriteLine($"    prefix({prefix}) [{psr.Min},{psr.Max}] -> {prefMapped}");
+                            }
+                            break; // longest prefix wins
                         }
                     }
                 }
 
-                if (Settings.PrintDebugOutput)
-                    Console.WriteLine($"  {a.EditorId}: tier {tier} ({TierSystem.GetName(tier)}) [{tMin},{tMax}] via {mode} -> base {baseLevel}");
+                // ------------------------------------------------------------------
+                // STEP 6 — Plugin peer group (only if no faction AND not civilian/child)
+                // ------------------------------------------------------------------
+                if (a.FactionKey is null && !a.IsChild)
+                {
+                    string pluginKey = $"{a.ModKey.FileName}|{tier}";
+                    if (pluginSourceRange.TryGetValue(pluginKey, out var pgr) && sourceLvl > 0)
+                    {
+                        int clamped = Math.Clamp(sourceLvl, pgr.Min, pgr.Max);
+                        decimal pluginMapped = MapLevel(clamped, pgr.Min, pgr.Max, tMin, tMax);
+                        if (pluginMapped > best)
+                        {
+                            best = pluginMapped;
+                            if (Settings.PrintDebugOutput)
+                                Console.WriteLine($"    plugin({a.ModKey.FileName}) [{pgr.Min},{pgr.Max}] -> {pluginMapped}");
+                        }
+                    }
+                }
 
-                // Apply CalcMaxLevel as floor — result must never be below the author's intended ceiling
-                short result = (short)Math.Clamp(baseLevel, tMin, tMax);
-                if (calcMaxFloor > 0 && result < calcMaxFloor)
-                    result = (short)Math.Min(calcMaxFloor, short.MaxValue);
+                // ------------------------------------------------------------------
+                // STEP 7 — Equipment score bonus (always additive, raises floor)
+                // equipScore is [0,1]; bonus = equipScore × 15% of tier range width
+                // ------------------------------------------------------------------
+                if (a.EquipmentScore > 0f)
+                {
+                    decimal equipBonus = (decimal)a.EquipmentScore * (tMax - tMin) * 0.15m;
+                    best += Math.Round(equipBonus);
+                    if (Settings.PrintDebugOutput && equipBonus > 0)
+                        Console.WriteLine($"    equip bonus +{Math.Round(equipBonus)} (score={a.EquipmentScore:F3})");
+                }
+
+                // ------------------------------------------------------------------
+                // STEP 8 — Clamp and return
+                // No lower bound below tMin (can exceed tMax for above-ceiling NPCs)
+                // ------------------------------------------------------------------
+                short result = (short)Math.Max(tMin, Math.Min(best, short.MaxValue));
+
+                if (Settings.PrintDebugOutput)
+                    Console.WriteLine($"    => final={result}");
+
                 return result;
             }
 
@@ -1530,9 +1700,9 @@ namespace SkyrimReleveler
 
                     // Importance score floor
                     var scoreResult = ImportanceScorer.Score(getter, linkCache, importanceWeights, assessment);
-                    int floorLevel  = ImportanceScorer.DeriveFloor(scoreResult.Score, assessment.Tier, Settings.WorldMaxLevel);
+                    int scalingBaseForFloor = assessment.Tier == 0 ? Settings.WorldMaxLevel : Math.Min(Settings.TierScalingBase, Settings.WorldMaxLevel);
+                    int floorLevel  = ImportanceScorer.DeriveFloor(scoreResult.Score, assessment.Tier, scalingBaseForFloor);
                     int finalBase   = Math.Max(baseLevel, floorLevel);
-
                     if (Settings.PrintDebugOutput)
                     {
                         if (floorLevel > baseLevel)
