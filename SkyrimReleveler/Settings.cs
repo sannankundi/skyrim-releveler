@@ -85,6 +85,12 @@ namespace SkyrimReleveler
         [Tooltip("The value all tier ranges scale against. Tier 0 (Cosmic, Molag Bal / Daedric Prince level) maps to this ceiling. All other tiers scale proportionally below it. Default is 2000.")]
         public int TierScalingBase { get; set; } = 2000;
 
+        [Tooltip("The NPC source level at which the above-ceiling multiplier fades to 1.0 (no bonus). NPCs at or above this level get no multiplier inflation on top of their tier range — they are already powerful enough. NPCs between the vanilla ceiling and this value get a smoothly diminishing bonus. Default is 1000.")]
+        public float MultiplierFadeOutLevel { get; set; } = 1000f;
+
+        [Tooltip("The maximum tier multiplier applied to unique NPCs whose source level is just above the vanilla ceiling for their tier. Decays logarithmically toward 1.0 as source level approaches MultiplierFadeOutLevel. Default is 4.0.")]
+        public float MaxTierMultiplier { get; set; } = 4.0f;
+
         [Tooltip("Minimum number of NPCs that must share a faction before that faction is used as a peer group for percentile scoring. Factions with fewer members fall back to race-based peer comparison. Default is 3.")]
         public int AutoFactionMinPeers { get; set; } = 3;
 

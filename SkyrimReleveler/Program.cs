@@ -131,6 +131,7 @@ namespace SkyrimReleveler
         public bool HasPeerGroup { get; set; }
         public ModKey ModKey { get; set; }
         public bool IsChild { get; set; }
+        public bool IsUnique { get; set; }
     }
 
     public class Program
@@ -175,13 +176,21 @@ namespace SkyrimReleveler
                 {
                     int calcMax = npc.Configuration.CalcMaxLevel;
                     int calcMin = npc.Configuration.CalcMinLevel;
-                    // LevelMult × CalcMaxLevel gives the true intended ceiling
-                    // (e.g. Molag Bal: mult=4.0, calcMax=250 → effective=1000)
-                    float mult = pcMult.LevelMult;
+                    float mult  = pcMult.LevelMult;
+
                     if (calcMax > 0)
                     {
-                        int multApplied = (mult > 0f) ? (int)Math.Round(mult * calcMax) : calcMax;
-                        return Math.Max(calcMax, multApplied);
+                        // Only apply LevelMult × CalcMax for unique NPCs with a
+                        // meaningful multiplier (>1.0). Generic leveled enemies use
+                        // CalcMax directly — their mult just controls in-game scaling,
+                        // not their authored power level.
+                        bool isUnique = npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique);
+                        if (isUnique && mult > 1.0f)
+                        {
+                            int multApplied = (int)Math.Round(mult * calcMax);
+                            return Math.Max(calcMax, multApplied);
+                        }
+                        return calcMax;
                     }
                     if (calcMin > 0) return calcMin;
                     return null;
@@ -1251,12 +1260,15 @@ namespace SkyrimReleveler
             // -----------------------------------------------------------------------
             // assessments[formKey] = NpcAssessment
             var assessments = new Dictionary<FormKey, NpcAssessment>();
-            var factionEffLevels = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-            var raceEffLevels = new Dictionary<FormKey, List<int>>();
-            var tierEffLevels = new Dictionary<int, List<int>>();
-            var factionEquipScores = new Dictionary<string, List<float>>(StringComparer.OrdinalIgnoreCase);
-            var raceEquipScores = new Dictionary<FormKey, List<float>>();
-            var pluginEffLevels = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+            var factionEffLevels         = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+            var factionEffLevelsNonUnique = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+            var raceEffLevels            = new Dictionary<FormKey, List<int>>();
+            var raceEffLevelsNonUnique   = new Dictionary<FormKey, List<int>>();
+            var tierEffLevels            = new Dictionary<int, List<int>>();
+            var factionEquipScores       = new Dictionary<string, List<float>>(StringComparer.OrdinalIgnoreCase);
+            var raceEquipScores          = new Dictionary<FormKey, List<float>>();
+            var pluginEffLevels          = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+            var pluginEffLevelsNonUnique = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
             {
@@ -1307,6 +1319,7 @@ namespace SkyrimReleveler
                                        importanceWeights.ChildClassTokens.Any(t =>
                                            (clsCheck.EditorID?.Equals(t, StringComparison.OrdinalIgnoreCase) ?? false) ||
                                            (clsCheck.Name?.String?.Equals(t, StringComparison.OrdinalIgnoreCase) ?? false)),
+                    IsUnique         = getter.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique),
                 };
                 // HasPeerGroup is determined after source ranges are built — set below
                 assessments[getter.FormKey] = assessment;
@@ -1314,26 +1327,50 @@ namespace SkyrimReleveler
                 // Accumulate effective levels and equipment scores into peer lists
                 if (effLevel.HasValue && effLevel.Value > 0)
                 {
-                    if (bestFaction is not null)
+                    bool isUniqueNpc = getter.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique);
+
+                    void AddToList<TKey>(Dictionary<TKey, List<int>> dict,
+                                        Dictionary<TKey, List<int>> dictNonUnique,
+                                        TKey key) where TKey : notnull
                     {
-                        if (!factionEffLevels.TryGetValue(bestFaction, out var fl))
-                            factionEffLevels[bestFaction] = fl = new List<int>();
-                        fl.Add(effLevel.Value);
+                        if (!dict.TryGetValue(key, out var all))
+                            dict[key] = all = new List<int>();
+                        all.Add(effLevel.Value);
+                        if (!isUniqueNpc)
+                        {
+                            if (!dictNonUnique.TryGetValue(key, out var nu))
+                                dictNonUnique[key] = nu = new List<int>();
+                            nu.Add(effLevel.Value);
+                        }
                     }
 
-                    if (!raceEffLevels.TryGetValue(raceFormKey, out var rl))
-                        raceEffLevels[raceFormKey] = rl = new List<int>();
-                    rl.Add(effLevel.Value);
+                    if (bestFaction is not null)
+                        AddToList(factionEffLevels, factionEffLevelsNonUnique, bestFaction);
+
+                    AddToList(raceEffLevels, raceEffLevelsNonUnique, raceFormKey);
 
                     if (!tierEffLevels.TryGetValue(tier, out var tl))
                         tierEffLevels[tier] = tl = new List<int>();
                     tl.Add(effLevel.Value);
 
-                    // Plugin peer group — keyed by ModKey + tier
-                    string pluginKey = $"{getter.FormKey.ModKey.FileName}|{tier}";
-                    if (!pluginEffLevels.TryGetValue(pluginKey, out var pgl))
-                        pluginEffLevels[pluginKey] = pgl = new List<int>();
-                    pgl.Add(effLevel.Value);
+                    // Plugin peer group — skip vanilla ESMs (too wide to be useful)
+                    var modKey = getter.FormKey.ModKey;
+                    bool isVanilla = modKey == Skyrim.ModKey ||
+                                     modKey == Dawnguard.ModKey ||
+                                     modKey == Dragonborn.ModKey;
+                    if (!isVanilla)
+                    {
+                        string pluginKey = $"{modKey.FileName}|{tier}";
+                        if (!pluginEffLevels.TryGetValue(pluginKey, out var pgl))
+                            pluginEffLevels[pluginKey] = pgl = new List<int>();
+                        pgl.Add(effLevel.Value);
+                        if (!isUniqueNpc)
+                        {
+                            if (!pluginEffLevelsNonUnique.TryGetValue(pluginKey, out var pgnu))
+                                pluginEffLevelsNonUnique[pluginKey] = pgnu = new List<int>();
+                            pgnu.Add(effLevel.Value);
+                        }
+                    }
                 }
 
                 // Accumulate equipment scores for peer average computation
@@ -1352,9 +1389,11 @@ namespace SkyrimReleveler
             }
 
             // Sort all level lists for trimmed-range calculation
-            foreach (var lst in factionEffLevels.Values) lst.Sort();
-            foreach (var lst in raceEffLevels.Values)    lst.Sort();
-            foreach (var lst in tierEffLevels.Values)    lst.Sort();
+            foreach (var lst in factionEffLevels.Values)         lst.Sort();
+            foreach (var lst in factionEffLevelsNonUnique.Values) lst.Sort();
+            foreach (var lst in raceEffLevels.Values)            lst.Sort();
+            foreach (var lst in raceEffLevelsNonUnique.Values)   lst.Sort();
+            foreach (var lst in tierEffLevels.Values)            lst.Sort();
 
             // Compute peer average equipment scores
             var factionAvgEquip = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
@@ -1375,16 +1414,24 @@ namespace SkyrimReleveler
             float cutoff = Settings.OutlierPercentileCutoff;
             int   minPeers = Settings.AutoFactionMinPeers;
 
-            // Pre-compute trimmed source ranges for each faction
-            var factionSourceRange = new Dictionary<string, (int Min, int Max)>(StringComparer.OrdinalIgnoreCase);
+            // Pre-compute trimmed source ranges for each faction — all and non-unique
+            var factionSourceRange         = new Dictionary<string, (int Min, int Max)>(StringComparer.OrdinalIgnoreCase);
+            var factionSourceRangeNonUnique = new Dictionary<string, (int Min, int Max)>(StringComparer.OrdinalIgnoreCase);
             foreach (var (fk, lvls) in factionEffLevels)
                 if (lvls.Count >= minPeers)
                     factionSourceRange[fk] = GetTrimmedRange(lvls, cutoff);
+            foreach (var (fk, lvls) in factionEffLevelsNonUnique)
+                if (lvls.Count >= minPeers)
+                    factionSourceRangeNonUnique[fk] = GetTrimmedRange(lvls, cutoff);
 
-            var raceSourceRange = new Dictionary<FormKey, (int Min, int Max)>();
+            var raceSourceRange         = new Dictionary<FormKey, (int Min, int Max)>();
+            var raceSourceRangeNonUnique = new Dictionary<FormKey, (int Min, int Max)>();
             foreach (var (rk, lvls) in raceEffLevels)
                 if (lvls.Count >= 1)
                     raceSourceRange[rk] = GetTrimmedRange(lvls, cutoff);
+            foreach (var (rk, lvls) in raceEffLevelsNonUnique)
+                if (lvls.Count >= 1)
+                    raceSourceRangeNonUnique[rk] = GetTrimmedRange(lvls, cutoff);
 
             // Stem groups as Path 3 — within same tier only, minimum 5 members
             // stemKey = tier.ToString() + "|" + stem
@@ -1433,23 +1480,30 @@ namespace SkyrimReleveler
             foreach (var (tk, lvls) in tierEffLevels)
                 tierSourceRange[tk] = GetTrimmedRange(lvls, cutoff);
 
-            // Plugin peer groups — same mod + same tier, minimum 2 members
-            foreach (var lst in pluginEffLevels.Values) lst.Sort();
-            var pluginSourceRange = new Dictionary<string, (int Min, int Max)>(StringComparer.OrdinalIgnoreCase);
+            // Plugin peer groups — same mod + same tier, minimum 2 members, skip vanilla ESMs
+            foreach (var lst in pluginEffLevels.Values)          lst.Sort();
+            foreach (var lst in pluginEffLevelsNonUnique.Values)  lst.Sort();
+            var pluginSourceRange         = new Dictionary<string, (int Min, int Max)>(StringComparer.OrdinalIgnoreCase);
+            var pluginSourceRangeNonUnique = new Dictionary<string, (int Min, int Max)>(StringComparer.OrdinalIgnoreCase);
             foreach (var (pk, lvls) in pluginEffLevels)
                 if (lvls.Count >= 2)
                     pluginSourceRange[pk] = GetTrimmedRange(lvls, cutoff);
+            foreach (var (pk, lvls) in pluginEffLevelsNonUnique)
+                if (lvls.Count >= 2)
+                    pluginSourceRangeNonUnique[pk] = GetTrimmedRange(lvls, cutoff);
 
             foreach (var a in assessments.Values)
             {
                 string stem = GetStem(a.EditorId);
                 string pluginKey = $"{a.ModKey.FileName}|{a.Tier}";
+                var facRange  = a.IsUnique ? factionSourceRange : factionSourceRangeNonUnique;
+                var plugRange = a.IsUnique ? pluginSourceRange  : pluginSourceRangeNonUnique;
                 a.HasPeerGroup =
-                    (a.FactionKey is not null && factionSourceRange.ContainsKey(a.FactionKey)) ||
+                    (a.FactionKey is not null && facRange.ContainsKey(a.FactionKey)) ||
                     raceSourceRange.ContainsKey(a.RaceFormKey) ||
                     stemSourceRange.ContainsKey($"{a.Tier}|{stem}") ||
                     GetEditorIdPrefixes(a.EditorId).Any(p => prefixSourceRange.ContainsKey($"{a.Tier}|{p}")) ||
-                    pluginSourceRange.ContainsKey(pluginKey);
+                    plugRange.ContainsKey(pluginKey);
             }
 
             Console.WriteLine();
@@ -1484,15 +1538,20 @@ namespace SkyrimReleveler
                 // ------------------------------------------------------------------
                 // STEP 2 — Tier-based base level (always computed, always the floor)
                 // tierCeiling = vanilla max level for this tier.
-                // If sourceLvl <= ceiling  → linear map [0, ceiling] → [tMin, tMax]
-                // If sourceLvl >  ceiling  → tMax × (sourceLvl / ceiling)  (unbounded)
+                // If sourceLvl > tMax           → use sourceLvl directly (author intent)
+                // If sourceLvl <= ceiling        → linear map [0, ceiling] → [tMin, tMax]
+                // If ceiling < sourceLvl <= tMax → fading multiplier toward tMax
                 // ------------------------------------------------------------------
                 int vanillaCeiling = TierSystem.GetVanillaCeiling(tier);
                 decimal baseLevel;
                 if (sourceLvl <= 0)
                 {
-                    // No source level at all — place at tier minimum
                     baseLevel = tMin;
+                }
+                else if (sourceLvl > tMax)
+                {
+                    // Author explicitly set a level beyond the tier ceiling — respect it
+                    baseLevel = sourceLvl;
                 }
                 else if (sourceLvl <= vanillaCeiling)
                 {
@@ -1502,9 +1561,37 @@ namespace SkyrimReleveler
                 }
                 else
                 {
-                    // Multiplier: above-ceiling NPCs scale beyond the tier range
-                    decimal multiplier = (decimal)sourceLvl / vanillaCeiling;
-                    baseLevel = Math.Round(tMax * multiplier);
+                    // Above vanilla ceiling but still within tier range:
+                    // only unique NPCs get the fading multiplier bonus.
+                    if (a.IsUnique)
+                    {
+                        float fadeOutLevel = Settings.MultiplierFadeOutLevel;
+                        float maxMult      = Math.Max(1f, Settings.MaxTierMultiplier);
+
+                        // linearT: 0 at vanillaCeiling, 1 at fadeOutLevel
+                        decimal linearT = Math.Clamp(
+                            (decimal)(sourceLvl - vanillaCeiling) / Math.Max((decimal)fadeOutLevel - vanillaCeiling, 1m),
+                            0m, 1m);
+
+                        // Logarithmic fadeT: log(1 + t×(e-1)) maps [0,1]→[0,1]
+                        // Grows fast early (0.5→0.69, 0.7→0.87) then slows toward 1.0.
+                        // This makes the multiplier drop off quickly as sourceLvl rises.
+                        double eMinusOne = Math.E - 1.0;
+                        decimal fadeT    = (decimal)Math.Log(1.0 + (double)linearT * eMinusOne);
+
+                        // effectiveMult: MaxTierMultiplier at fadeT=0, decays to 1.0 at fadeT=1
+                        decimal effectiveMult = 1m + (decimal)(maxMult - 1f) * (1m - fadeT);
+                        baseLevel = Math.Round(tMax * effectiveMult);
+
+                        if (Settings.PrintDebugOutput)
+                            Console.WriteLine($"    multiplier: linearT={linearT:F3} fadeT={fadeT:F3} mult={effectiveMult:F3}");
+                    }
+                    else
+                    {
+                        // Non-unique: linear map up to tMax, no bonus
+                        decimal t = (decimal)sourceLvl / vanillaCeiling;
+                        baseLevel = Math.Round(Math.Min(tMin + t * (tMax - tMin), tMax));
+                    }
                 }
 
                 if (Settings.PrintDebugOutput)
@@ -1514,8 +1601,11 @@ namespace SkyrimReleveler
 
                 // ------------------------------------------------------------------
                 // STEP 3 — Race peer mapping (always runs, raises floor)
+                // Use non-unique range when NPC is not unique, to avoid being
+                // inflated by named boss outliers in the same race.
                 // ------------------------------------------------------------------
-                if (raceSourceRange.TryGetValue(a.RaceFormKey, out var rsr) && sourceLvl > 0)
+                var activeRaceRange = a.IsUnique ? raceSourceRange : raceSourceRangeNonUnique;
+                if (activeRaceRange.TryGetValue(a.RaceFormKey, out var rsr) && sourceLvl > 0)
                 {
                     int clamped = Math.Clamp(sourceLvl, rsr.Min, rsr.Max);
                     decimal raceMapped = MapLevel(clamped, rsr.Min, rsr.Max, tMin, tMax);
@@ -1530,9 +1620,10 @@ namespace SkyrimReleveler
                 // ------------------------------------------------------------------
                 // STEP 4 — Faction peer mapping (only if sourceLvl <= 100)
                 // ------------------------------------------------------------------
+                var activeFacRange = a.IsUnique ? factionSourceRange : factionSourceRangeNonUnique;
                 if (sourceLvl <= 100 &&
                     a.FactionKey is not null &&
-                    factionSourceRange.TryGetValue(a.FactionKey, out var fsr))
+                    activeFacRange.TryGetValue(a.FactionKey, out var fsr))
                 {
                     int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : fsr.Min, fsr.Min, fsr.Max);
                     decimal facMapped = sourceLvl > 0
@@ -1590,11 +1681,13 @@ namespace SkyrimReleveler
 
                 // ------------------------------------------------------------------
                 // STEP 6 — Plugin peer group (only if no faction AND not civilian/child)
+                // Use non-unique range when NPC is not unique.
                 // ------------------------------------------------------------------
                 if (a.FactionKey is null && !a.IsChild)
                 {
                     string pluginKey = $"{a.ModKey.FileName}|{tier}";
-                    if (pluginSourceRange.TryGetValue(pluginKey, out var pgr) && sourceLvl > 0)
+                    var activePluginRange = a.IsUnique ? pluginSourceRange : pluginSourceRangeNonUnique;
+                    if (activePluginRange.TryGetValue(pluginKey, out var pgr) && sourceLvl > 0)
                     {
                         int clamped = Math.Clamp(sourceLvl, pgr.Min, pgr.Max);
                         decimal pluginMapped = MapLevel(clamped, pgr.Min, pgr.Max, tMin, tMax);
