@@ -183,11 +183,12 @@ namespace SkyrimReleveler
                     float mult  = pcMult.LevelMult;
                     if (calcMax > 0)
                     {
-                        // Only apply LevelMult × CalcMax for unique NPCs with mult > 1.0.
-                        // mult=1.0 NPCs scale 1:1 with player — CalcMax is just a cap,
-                        // not an authored power statement. These are treated like CalcMax only.
+                        // Only apply LevelMult × CalcMax for unique NPCs with mult > 2.0.
+                        // Multipliers of 1.x just mean "slightly above player scale" —
+                        // not a genuine power statement. Only truly scaled-up entities
+                        // (e.g. mult=4.0 like Molag Bal) should get this treatment.
                         bool isUnique = npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique);
-                        if (isUnique && mult > 1.0f)
+                        if (isUnique && mult > 2.0f)
                         {
                             int multApplied = (int)Math.Round(mult * calcMax);
                             return Math.Max(calcMax, multApplied);
@@ -1566,7 +1567,7 @@ namespace SkyrimReleveler
                     // Only respect this for fixed-level or high-mult unique NPCs —
                     // PC-mult NPCs with mult ≤ 1.0 just have a player-scale cap,
                     // their CalcMax is not a raw power level.
-                    bool trustHighLevel = a.IsUnique && (a.LevelMult <= 0f || a.LevelMult > 1.0f);
+                    bool trustHighLevel = a.IsUnique && (a.LevelMult <= 0f || a.LevelMult > 2.0f);
                     baseLevel = trustHighLevel ? sourceLvl : tMax;
                 }
                 else if (sourceLvl <= vanillaCeiling)
@@ -1583,7 +1584,7 @@ namespace SkyrimReleveler
                     // PC-mult NPCs with mult > 1.0 (truly scaled-up entities).
                     // PC-mult NPCs with mult ≤ 1.0 just have a player-scale cap —
                     // their CalcMax is not a power statement, so cap at tMax.
-                    bool canMultiply = a.IsUnique && (a.LevelMult <= 0f || a.LevelMult > 1.0f);
+                    bool canMultiply = a.IsUnique && (a.LevelMult <= 0f || a.LevelMult > 2.0f);
                     if (canMultiply)
                     {
                         float fadeOutLevel = Settings.MultiplierFadeOutLevel;
