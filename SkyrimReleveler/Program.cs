@@ -171,19 +171,19 @@ namespace SkyrimReleveler
             switch (npc.Configuration.Level)
             {
                 case INpcLevelGetter fixedLevel when fixedLevel.Level > 0:
+                    // Fixed level NPC — use the fixed level directly.
+                    // CalcMaxLevel on a fixed-level NPC is just a scaling cap, not
+                    // an authored power statement, so we ignore it here.
                     return fixedLevel.Level;
                 case IPcLevelMultGetter pcMult:
                 {
                     int calcMax = npc.Configuration.CalcMaxLevel;
                     int calcMin = npc.Configuration.CalcMinLevel;
                     float mult  = pcMult.LevelMult;
-
                     if (calcMax > 0)
                     {
-                        // Only apply LevelMult × CalcMax for unique NPCs with a
-                        // meaningful multiplier (>1.0). Generic leveled enemies use
-                        // CalcMax directly — their mult just controls in-game scaling,
-                        // not their authored power level.
+                        // For unique NPCs with mult > 1.0, the true intended ceiling
+                        // is LevelMult × CalcMax (e.g. Molag Bal: 4.0 × 250 = 1000)
                         bool isUnique = npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique);
                         if (isUnique && mult > 1.0f)
                         {
@@ -1172,8 +1172,17 @@ namespace SkyrimReleveler
             bool IsFollower(INpcGetter npc)
             {
                 if (!Settings.ScaleFollowers || npc.EditorID is null) return false;
+                // Vanilla follower factions
                 if (npc.Factions.Any(f => f.Faction.Equals(Skyrim.Faction.PotentialFollowerFaction) ||
                                           f.Faction.Equals(Skyrim.Faction.PotentialHireling))) return true;
+                // Any faction whose EditorID contains "follower" (catches mod-added follower factions
+                // like AQAmbrielFollowerFaction, InigoPotentialFollowerFaction, etc.)
+                foreach (var rankEntry in npc.Factions)
+                {
+                    if (!rankEntry.Faction.TryResolve(linkCache, out var fac) || fac.EditorID is null) continue;
+                    if (fac.EditorID.Contains("follower", StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                // Custom follower list (key-based EditorID matching)
                 foreach (var entry in customFollowers.Followers)
                 {
                     if (string.IsNullOrEmpty(entry.Key)) continue;
@@ -1527,13 +1536,13 @@ namespace SkyrimReleveler
 
                 // ------------------------------------------------------------------
                 // STEP 1 — Effective source level
-                // For PC-mult NPCs: max(CalcMax, LevelMult × CalcMax) already
-                // computed in GetEffectiveLevel. Take the best of effLevel and
-                // CalcMax as the source anchor.
+                // GetEffectiveLevel already returns the right value:
+                // - Fixed level NPCs → their fixed level
+                // - PC-mult NPCs → CalcMax (or LevelMult×CalcMax for unique+mult>1)
+                // We do NOT override with CalcMax here — for fixed-level NPCs,
+                // CalcMax is just a scaling cap, not an authored power statement.
                 // ------------------------------------------------------------------
-                int effLvl    = a.EffectiveLevel ?? 0;
-                int calcMax   = a.CalcMax;
-                int sourceLvl = calcMax > 0 ? Math.Max(effLvl, calcMax) : effLvl;
+                int sourceLvl = a.EffectiveLevel ?? 0;
 
                 // ------------------------------------------------------------------
                 // STEP 2 — Tier-based base level (always computed, always the floor)
@@ -1758,19 +1767,14 @@ namespace SkyrimReleveler
                     GetRaceModifier(getter, out var rAdd, out var rMult);
                     short fixedLevel = (short)Math.Clamp(
                         Math.Round(namedLevel * rMult) + rAdd + Settings.GlobalOffset, 1, short.MaxValue);
-                    short existingMax2 = getter.Configuration.CalcMaxLevel;
-                    if (existingMax2 > 0 && existingMax2 > fixedLevel)
-                    {
-                        if (Settings.PrintDebugOutput)
-                            Console.WriteLine($"  {editorId}: named would set {fixedLevel} but existing CalcMaxLevel={existingMax2} is higher — preserved");
-                    }
-                    else
-                    {
-                        if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
-                        ApplyLevel(npcCopy, fixedLevel);
-                        wasChanged = true;
-                        ++namedCount;
-                    }
+                    // Always apply named level — never preserve a stale existing CalcMaxLevel
+                    // (could be from a previous patcher run and inflated)
+                    if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
+                    ApplyLevel(npcCopy, fixedLevel);
+                    // Clear template flag for stats so skills/perks are redistributed at named level
+                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
+                    wasChanged = true;
+                    ++namedCount;
                 }
                 // Priority 3: civilians (class-based) and named characters (no hostile faction)
                 else if (IsCivilian(getter, linkCache, factionMemberCount,
@@ -1816,21 +1820,15 @@ namespace SkyrimReleveler
 
                     reviewLogger.MaybeWrite(getter, assessment, baseLevel, floorLevel, newLevel, scoreResult, importanceWeights);
 
-                    short existingMax = getter.Configuration.CalcMaxLevel;
-                    if (existingMax > 0 && existingMax > newLevel)
-                    {
-                        if (Settings.PrintDebugOutput)
-                            Console.WriteLine($"  {editorId}: pipeline would set {newLevel} but existing CalcMaxLevel={existingMax} is higher — preserved");
-                        ++pipelineCount;
-                    }
-                    else
-                    {
-                        if (Settings.PrintDebugOutput)
-                            Console.WriteLine($"    -> final {newLevel} (offset={Settings.GlobalOffset}, raceMult={rMult}, raceAdd={rAdd}, bonus={bonusPct}%)");
-                        ApplyLevel(npcCopy, newLevel);
-                        wasChanged = true;
-                        ++pipelineCount;
-                    }
+                    // Always apply the computed level — never preserve a stale
+                    // existing CalcMaxLevel from a previous patcher run.
+                    if (Settings.PrintDebugOutput)
+                        Console.WriteLine($"    -> final {newLevel} (offset={Settings.GlobalOffset}, raceMult={rMult}, raceAdd={rAdd}, bonus={bonusPct}%)");
+                    ApplyLevel(npcCopy, newLevel);
+                    // Clear Stats template flag so skill/perk redistribution runs at the new level
+                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
+                    wasChanged = true;
+                    ++pipelineCount;
                 }
 
                 // All NPCs: class rebuild, skill redistribution, perk distribution
