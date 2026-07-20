@@ -132,7 +132,7 @@ namespace SkyrimReleveler
         public ModKey ModKey { get; set; }
         public bool IsChild { get; set; }
         public bool IsUnique { get; set; }
-        public float LevelMult { get; set; } = 0f; // 0 = fixed level, >0 = PC-mult
+        public float LevelMult { get; set; } = 0f; // from PC-mult record, used as post-pipeline multiplier
     }
 
     public class Program
@@ -172,31 +172,14 @@ namespace SkyrimReleveler
             switch (npc.Configuration.Level)
             {
                 case INpcLevelGetter fixedLevel when fixedLevel.Level > 0:
-                    // Fixed level NPC — use the fixed level directly.
-                    // CalcMaxLevel on a fixed-level NPC is just a scaling cap, not
-                    // an authored power statement, so we ignore it here.
                     return fixedLevel.Level;
-                case IPcLevelMultGetter pcMult:
+                case IPcLevelMultGetter:
                 {
                     int calcMax = npc.Configuration.CalcMaxLevel;
-                    int calcMin = npc.Configuration.CalcMinLevel;
-                    float mult  = pcMult.LevelMult;
-                    if (calcMax > 0)
-                    {
-                        // Only apply LevelMult × CalcMax for unique NPCs with mult > 2.0.
-                        // Multipliers of 1.x just mean "slightly above player scale" —
-                        // not a genuine power statement. Only truly scaled-up entities
-                        // (e.g. mult=4.0 like Molag Bal) should get this treatment.
-                        bool isUnique = npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique);
-                        if (isUnique && mult > 2.0f)
-                        {
-                            int multApplied = (int)Math.Round(mult * calcMax);
-                            return Math.Max(calcMax, multApplied);
-                        }
-                        return calcMax;
-                    }
-                    if (calcMin > 0) return calcMin;
-                    return null;
+                    // CalcMin intentionally ignored — it's a floor, not a power statement.
+                    // LevelMult is handled separately as a post-pipeline multiplier.
+                    if (calcMax > 0) return calcMax;
+                    return null; // no authored level — LevelMult will be used post-pipeline
                 }
                 default:
                     return null;
@@ -1178,13 +1161,18 @@ namespace SkyrimReleveler
                 // Vanilla follower factions
                 if (npc.Factions.Any(f => f.Faction.Equals(Skyrim.Faction.PotentialFollowerFaction) ||
                                           f.Faction.Equals(Skyrim.Faction.PotentialHireling))) return true;
-                // Any faction whose EditorID contains "follower" (catches mod-added follower factions
-                // like AQAmbrielFollowerFaction, InigoPotentialFollowerFaction, etc.)
+                // Any faction whose EditorID contains "follower"
                 foreach (var rankEntry in npc.Factions)
                 {
                     if (!rankEntry.Faction.TryResolve(linkCache, out var fac) || fac.EditorID is null) continue;
                     if (fac.EditorID.Contains("follower", StringComparison.OrdinalIgnoreCase)) return true;
                 }
+                // PC-mult NPC with no CalcMax and no CalcMin — unbounded player scaling,
+                // treat as follower since there's no authored level ceiling to work from
+                if (npc.Configuration.Level is IPcLevelMultGetter &&
+                    npc.Configuration.CalcMaxLevel <= 0 &&
+                    npc.Configuration.CalcMinLevel <= 0)
+                    return true;
                 // Custom follower list (key-based EditorID matching)
                 foreach (var entry in customFollowers.Followers)
                 {
@@ -1530,181 +1518,84 @@ namespace SkyrimReleveler
             Console.WriteLine();
 
             // -----------------------------------------------------------------------
-            // Level computation — new 8-step design
+            // Level computation — 9-step design
+            // fadeT multiplier fires LAST after all peer comparisons are settled.
             // -----------------------------------------------------------------------
             short ComputeLevel(NpcAssessment a)
             {
                 int tier = a.Tier;
                 int scalingBase = Settings.TierScalingBase;
                 var (tMin, tMax) = TierSystem.GetRange(tier, scalingBase);
+                int vanillaCeiling = TierSystem.GetVanillaCeiling(tier);
 
-                // ------------------------------------------------------------------
-                // STEP 1 — Effective source level
-                // GetEffectiveLevel already returns the right value:
-                // - Fixed level NPCs → their fixed level
-                // - PC-mult NPCs → CalcMax (or LevelMult×CalcMax for unique+mult>1)
-                // We do NOT override with CalcMax here — for fixed-level NPCs,
-                // CalcMax is just a scaling cap, not an authored power statement.
-                // ------------------------------------------------------------------
+                // STEP 1 — Source level
+                // CalcMax → fixed level → null (no CalcMin ever)
                 int sourceLvl = a.EffectiveLevel ?? 0;
 
-                // ------------------------------------------------------------------
-                // STEP 2 — Tier-based base level (always computed, always the floor)
-                // tierCeiling = vanilla max level for this tier.
-                // If sourceLvl > tMax           → use sourceLvl directly (author intent)
-                // If sourceLvl <= ceiling        → linear map [0, ceiling] → [tMin, tMax]
-                // If ceiling < sourceLvl <= tMax → fading multiplier toward tMax
-                // ------------------------------------------------------------------
-                int vanillaCeiling = TierSystem.GetVanillaCeiling(tier);
-                decimal baseLevel;
+                // STEP 2 — Base level from tier (floor, no fadeT yet)
+                decimal best;
                 if (sourceLvl <= 0)
                 {
-                    baseLevel = tMin;
+                    best = tMin;
                 }
-                else if (sourceLvl > tMax)
+                else if (sourceLvl > tMax && a.IsUnique)
                 {
-                    // Source level already exceeds the tier ceiling.
-                    // Only respect this for fixed-level or high-mult unique NPCs —
-                    // PC-mult NPCs with mult ≤ 1.0 just have a player-scale cap,
-                    // their CalcMax is not a raw power level.
-                    bool trustHighLevel = a.IsUnique && (a.LevelMult <= 0f || a.LevelMult > 2.0f);
-                    baseLevel = trustHighLevel ? sourceLvl : tMax;
-                }
-                else if (sourceLvl <= vanillaCeiling)
-                {
-                    // Linear map: 0 → tMin, vanillaCeiling → tMax
-                    decimal t = (decimal)sourceLvl / vanillaCeiling;
-                    baseLevel = Math.Round(tMin + t * (tMax - tMin));
+                    best = sourceLvl; // trusted unique: author set level beyond tier
                 }
                 else
                 {
-                    // Above vanilla ceiling but still within tier range.
-                    // Multiplier only applies to unique NPCs where the source level
-                    // is genuinely authored as high — i.e. fixed-level NPCs, or
-                    // PC-mult NPCs with mult > 1.0 (truly scaled-up entities).
-                    // PC-mult NPCs with mult ≤ 1.0 just have a player-scale cap —
-                    // their CalcMax is not a power statement, so cap at tMax.
-                    bool canMultiply = a.IsUnique && (a.LevelMult <= 0f || a.LevelMult > 2.0f);
-                    if (canMultiply)
-                    {
-                        float fadeOutLevel = Settings.MultiplierFadeOutLevel;
-                        float maxMult      = Math.Max(1f, Settings.MaxTierMultiplier);
-
-                        // linearT: 0 at vanillaCeiling, 1 at fadeOutLevel
-                        decimal linearT = Math.Clamp(
-                            (decimal)(sourceLvl - vanillaCeiling) / Math.Max((decimal)fadeOutLevel - vanillaCeiling, 1m),
-                            0m, 1m);
-
-                        // Logarithmic fadeT: log(1 + t×(e-1)) maps [0,1]→[0,1]
-                        // Grows fast early (0.5→0.69, 0.7→0.87) then slows toward 1.0.
-                        // This makes the multiplier drop off quickly as sourceLvl rises.
-                        double eMinusOne = Math.E - 1.0;
-                        decimal fadeT    = (decimal)Math.Log(1.0 + (double)linearT * eMinusOne);
-
-                        // effectiveMult: MaxTierMultiplier at fadeT=0, decays to 1.0 at fadeT=1
-                        decimal effectiveMult = 1m + (decimal)(maxMult - 1f) * (1m - fadeT);
-                        baseLevel = Math.Round(tMax * effectiveMult);
-
-                        if (Settings.PrintDebugOutput)
-                            Console.WriteLine($"    multiplier: linearT={linearT:F3} fadeT={fadeT:F3} mult={effectiveMult:F3}");
-                    }
-                    else
-                    {
-                        // Non-unique: linear map up to tMax, no bonus
-                        decimal t = (decimal)sourceLvl / vanillaCeiling;
-                        baseLevel = Math.Round(Math.Min(tMin + t * (tMax - tMin), tMax));
-                    }
+                    // Linear map: 0→tMin, vanillaCeiling→tMax, capped at tMax
+                    decimal t = (decimal)sourceLvl / Math.Max(vanillaCeiling, 1);
+                    best = Math.Round(Math.Min(tMin + t * (tMax - tMin), tMax));
                 }
 
                 if (Settings.PrintDebugOutput)
-                    Console.WriteLine($"  {a.EditorId}: tier={tier}({TierSystem.GetName(tier)}) src={sourceLvl} ceil={vanillaCeiling} [{tMin},{tMax}] base={baseLevel}");
+                    Console.WriteLine($"  {a.EditorId}: tier={tier} [{tMin},{tMax}] src={sourceLvl} ceil={vanillaCeiling} base={best}");
 
-                decimal best = baseLevel; // floor — nothing can go below this
-
-                // ------------------------------------------------------------------
-                // STEP 3 — Race peer mapping (always runs, raises floor)
-                // Use non-unique range when NPC is not unique, to avoid being
-                // inflated by named boss outliers in the same race.
-                // ------------------------------------------------------------------
+                // STEP 3 — Race peers (always, raises floor)
                 var activeRaceRange = a.IsUnique ? raceSourceRange : raceSourceRangeNonUnique;
                 if (activeRaceRange.TryGetValue(a.RaceFormKey, out var rsr) && sourceLvl > 0)
                 {
                     int clamped = Math.Clamp(sourceLvl, rsr.Min, rsr.Max);
-                    decimal raceMapped = MapLevel(clamped, rsr.Min, rsr.Max, tMin, tMax);
-                    if (raceMapped > best)
-                    {
-                        best = raceMapped;
-                        if (Settings.PrintDebugOutput)
-                            Console.WriteLine($"    race peers [{rsr.Min},{rsr.Max}] -> {raceMapped}");
-                    }
+                    decimal mapped = MapLevel(clamped, rsr.Min, rsr.Max, tMin, tMax);
+                    if (mapped > best) { best = mapped; if (Settings.PrintDebugOutput) Console.WriteLine($"    race [{rsr.Min},{rsr.Max}] -> {mapped}"); }
                 }
 
-                // ------------------------------------------------------------------
-                // STEP 4 — Faction peer mapping (only if sourceLvl <= 100)
-                // ------------------------------------------------------------------
+                // STEP 4 — Faction peers (only if sourceLvl <= 100)
                 var activeFacRange = a.IsUnique ? factionSourceRange : factionSourceRangeNonUnique;
-                if (sourceLvl <= 100 &&
-                    a.FactionKey is not null &&
+                if (sourceLvl <= 100 && a.FactionKey is not null &&
                     activeFacRange.TryGetValue(a.FactionKey, out var fsr))
                 {
                     int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : fsr.Min, fsr.Min, fsr.Max);
-                    decimal facMapped = sourceLvl > 0
-                        ? MapLevel(clamped, fsr.Min, fsr.Max, tMin, tMax)
-                        : Math.Round((tMin + tMax) / 2m);
-                    if (facMapped > best)
-                    {
-                        best = facMapped;
-                        if (Settings.PrintDebugOutput)
-                            Console.WriteLine($"    faction({a.FactionKey}) [{fsr.Min},{fsr.Max}] -> {facMapped}");
-                    }
+                    decimal mapped = sourceLvl > 0 ? MapLevel(clamped, fsr.Min, fsr.Max, tMin, tMax) : Math.Round((tMin + tMax) / 2m);
+                    if (mapped > best) { best = mapped; if (Settings.PrintDebugOutput) Console.WriteLine($"    faction({a.FactionKey}) [{fsr.Min},{fsr.Max}] -> {mapped}"); }
                 }
 
-                // ------------------------------------------------------------------
-                // STEP 5 — Stem peer mapping (only if sourceLvl <= 100)
-                // ------------------------------------------------------------------
+                // STEP 5 — Stem + prefix peers (only if sourceLvl <= 100)
                 if (sourceLvl <= 100)
                 {
-                    string stem    = GetStem(a.EditorId);
+                    string stem = GetStem(a.EditorId);
                     string stemKey = $"{tier}|{stem}";
                     if (stemSourceRange.TryGetValue(stemKey, out var ssr))
                     {
                         int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : ssr.Min, ssr.Min, ssr.Max);
-                        decimal stemMapped = sourceLvl > 0
-                            ? MapLevel(clamped, ssr.Min, ssr.Max, tMin, tMax)
-                            : Math.Round((tMin + tMax) / 2m);
-                        if (stemMapped > best)
-                        {
-                            best = stemMapped;
-                            if (Settings.PrintDebugOutput)
-                                Console.WriteLine($"    stem({stem}) [{ssr.Min},{ssr.Max}] -> {stemMapped}");
-                        }
+                        decimal mapped = sourceLvl > 0 ? MapLevel(clamped, ssr.Min, ssr.Max, tMin, tMax) : Math.Round((tMin + tMax) / 2m);
+                        if (mapped > best) { best = mapped; if (Settings.PrintDebugOutput) Console.WriteLine($"    stem({stem}) [{ssr.Min},{ssr.Max}] -> {mapped}"); }
                     }
-
-                    // STEP 5b — Prefix peer mapping
                     foreach (var prefix in GetEditorIdPrefixes(a.EditorId))
                     {
                         string pk = $"{tier}|{prefix}";
                         if (prefixSourceRange.TryGetValue(pk, out var psr))
                         {
                             int clamped = Math.Clamp(sourceLvl > 0 ? sourceLvl : psr.Min, psr.Min, psr.Max);
-                            decimal prefMapped = sourceLvl > 0
-                                ? MapLevel(clamped, psr.Min, psr.Max, tMin, tMax)
-                                : Math.Round((tMin + tMax) / 2m);
-                            if (prefMapped > best)
-                            {
-                                best = prefMapped;
-                                if (Settings.PrintDebugOutput)
-                                    Console.WriteLine($"    prefix({prefix}) [{psr.Min},{psr.Max}] -> {prefMapped}");
-                            }
-                            break; // longest prefix wins
+                            decimal mapped = sourceLvl > 0 ? MapLevel(clamped, psr.Min, psr.Max, tMin, tMax) : Math.Round((tMin + tMax) / 2m);
+                            if (mapped > best) { best = mapped; if (Settings.PrintDebugOutput) Console.WriteLine($"    prefix({prefix}) [{psr.Min},{psr.Max}] -> {mapped}"); }
+                            break;
                         }
                     }
                 }
 
-                // ------------------------------------------------------------------
-                // STEP 6 — Plugin peer group (only if no faction AND not civilian/child)
-                // Use non-unique range when NPC is not unique.
-                // ------------------------------------------------------------------
+                // STEP 6 — Plugin peers (no faction, not child)
                 if (a.FactionKey is null && !a.IsChild)
                 {
                     string pluginKey = $"{a.ModKey.FileName}|{tier}";
@@ -1712,37 +1603,52 @@ namespace SkyrimReleveler
                     if (activePluginRange.TryGetValue(pluginKey, out var pgr) && sourceLvl > 0)
                     {
                         int clamped = Math.Clamp(sourceLvl, pgr.Min, pgr.Max);
-                        decimal pluginMapped = MapLevel(clamped, pgr.Min, pgr.Max, tMin, tMax);
-                        if (pluginMapped > best)
-                        {
-                            best = pluginMapped;
-                            if (Settings.PrintDebugOutput)
-                                Console.WriteLine($"    plugin({a.ModKey.FileName}) [{pgr.Min},{pgr.Max}] -> {pluginMapped}");
-                        }
+                        decimal mapped = MapLevel(clamped, pgr.Min, pgr.Max, tMin, tMax);
+                        if (mapped > best) { best = mapped; if (Settings.PrintDebugOutput) Console.WriteLine($"    plugin({a.ModKey.FileName}) [{pgr.Min},{pgr.Max}] -> {mapped}"); }
                     }
                 }
 
-                // ------------------------------------------------------------------
-                // STEP 7 — Equipment score bonus (always additive, raises floor)
-                // equipScore is [0,1]; bonus = equipScore × 15% of tier range width
-                // ------------------------------------------------------------------
+                // STEP 7 — Equipment score bonus (additive)
                 if (a.EquipmentScore > 0f)
                 {
                     decimal equipBonus = (decimal)a.EquipmentScore * (tMax - tMin) * 0.15m;
                     best += Math.Round(equipBonus);
-                    if (Settings.PrintDebugOutput && equipBonus > 0)
-                        Console.WriteLine($"    equip bonus +{Math.Round(equipBonus)} (score={a.EquipmentScore:F3})");
+                    if (Settings.PrintDebugOutput && equipBonus > 0) Console.WriteLine($"    equip +{Math.Round(equipBonus)}");
                 }
 
-                // ------------------------------------------------------------------
-                // STEP 8 — Clamp and return
-                // No lower bound below tMin (can exceed tMax for above-ceiling NPCs)
-                // ------------------------------------------------------------------
+                // STEP 8 — LevelMult post-pipeline (only for PC-mult NPCs with no CalcMax)
+                // sourceLvl=0 means no authored level found — use LevelMult to scale the
+                // pipeline result (e.g. a dragon with mult=1.1 and no CalcMax gets
+                // its tier-derived level × 1.1)
+                if (sourceLvl <= 0 && a.LevelMult > 0f && a.LevelMult != 1f)
+                {
+                    best = Math.Round(best * (decimal)a.LevelMult);
+                    if (Settings.PrintDebugOutput) Console.WriteLine($"    levelMult ×{a.LevelMult:F3} -> {best}");
+                }
+
+                // STEP 9 — fadeT multiplier (LAST — fires on final level, not sourceLvl)
+                // If best is already above MultiplierFadeOutLevel, fadeT→1.0 → no bonus.
+                // This means high-level NPCs (already 1200+) get no additional inflation.
+                if (a.IsUnique && best > vanillaCeiling)
+                {
+                    float fadeOutLevel = Settings.MultiplierFadeOutLevel;
+                    decimal linearT = Math.Clamp(
+                        (best - vanillaCeiling) / Math.Max((decimal)fadeOutLevel - vanillaCeiling, 1m),
+                        0m, 1m);
+                    double eMinusOne  = Math.E - 1.0;
+                    decimal fadeT     = (decimal)Math.Log(1.0 + (double)linearT * eMinusOne);
+                    float maxMult     = Math.Max(1f, Settings.MaxTierMultiplier);
+                    decimal effectiveMult = 1m + (decimal)(maxMult - 1f) * (1m - fadeT);
+                    if (effectiveMult > 1m)
+                    {
+                        decimal boosted = Math.Round(best * effectiveMult);
+                        if (Settings.PrintDebugOutput) Console.WriteLine($"    fadeT={fadeT:F3} mult={effectiveMult:F3} {best}->{boosted}");
+                        best = boosted;
+                    }
+                }
+
                 short result = (short)Math.Max(tMin, Math.Min(best, short.MaxValue));
-
-                if (Settings.PrintDebugOutput)
-                    Console.WriteLine($"    => final={result}");
-
+                if (Settings.PrintDebugOutput) Console.WriteLine($"    => {result}");
                 return result;
             }
 
