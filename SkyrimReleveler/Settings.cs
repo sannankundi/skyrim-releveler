@@ -5,15 +5,6 @@ using Mutagen.Bethesda.WPF.Reflection.Attributes;
 
 namespace SkyrimReleveler
 {
-    public class BonusKeyword
-    {
-        [Tooltip("If an NPC's EditorID contains this string (case-insensitive), apply the bonus percent to their computed level.")]
-        public string Keyword { get; set; } = "";
-
-        [Tooltip("Percentage bonus added to the NPC's computed level. e.g. 25 = +25%. Stacks with GlobalOffset.")]
-        public float BonusPercent { get; set; } = 25f;
-    }
-
     public class FollowerEntry
     {
         [Tooltip("If an NPC's EditorID contains this string (case-insensitive), it is treated as a follower and gets unlimited player scaling.")]
@@ -37,149 +28,92 @@ namespace SkyrimReleveler
         [Tooltip("Prints detailed per-NPC level computation info to the Synthesis log. Useful for diagnosing unexpected levels. Leave off for normal runs.")]
         public bool PrintDebugOutput { get; set; } = false;
 
-        [Tooltip("If enabled, overwrites all deployed data files (named_npcs.json, importanceWeights.json, etc.) with the bundled defaults on the next run. Turn on after updating the patcher to push new defaults. Automatically resets to false after running.")]
+        [Tooltip("If enabled, overwrites all deployed data files (named_npcs.json, etc.) with the bundled defaults on the next run. Automatically resets to false after running.")]
         public bool ForceReseedData { get; set; } = false;
 
-        [Tooltip("Dumps all race EditorIDs from the full load order to the log at startup, then continues normally. Use this after adding new mods to check for new races that may need classifier attention. Safe to leave off during normal runs.")]
+        [Tooltip("Dumps all race EditorIDs from the full load order to the log at startup. Use after adding new mods to check for new races that may need classifier attention.")]
         public bool DumpRaces { get; set; } = false;
 
         // -------------------------------------------------------------------------
         // Follower scaling
         // -------------------------------------------------------------------------
-        [Tooltip("If enabled, followers (vanilla follower factions + custom list) scale 1:1 with the player with no level cap. They will never become weaker than the player. Followers are excluded from NPC releveling.")]
+        [Tooltip("If enabled, followers scale 1:1 with the player with no level cap. Followers are excluded from NPC releveling.")]
         public bool ScaleFollowers { get; set; } = true;
 
-        [Tooltip("The assumed level used to calculate how many perks followers receive. Since followers scale with the player instead of having a fixed level, this value is used as a stand-in for perk budget. Default is 100. Set to 0 to give followers no perks.")]
+        [Tooltip("The assumed level used to calculate how many perks followers receive. Default is 500. Set to 0 to give followers no perks.")]
         public int FollowerPerkLevel { get; set; } = 500;
 
         // -------------------------------------------------------------------------
         // NPC skill redistribution
         // -------------------------------------------------------------------------
-        [Tooltip("Skill points given to each NPC per level, distributed across their skill trees based on class weights. A level 50 NPC with 2.5 gets 125 total points. Set to 0 to leave NPC skills at their original values.")]
+        [Tooltip("Skill points given to each NPC per level, distributed across their skill trees based on class weights. Set to 0 to leave NPC skills at their original values.")]
         public float NPCSkillsPerLevel { get; set; } = 0.7f;
 
-        [Tooltip("The maximum level any individual NPC skill can reach. Raising this above 100 allows very high level NPCs to exceed the normal cap in their primary skills.")]
+        [Tooltip("The maximum level any individual NPC skill can reach.")]
         public byte NPCMaxSkillLevel { get; set; } = 100;
 
         // -------------------------------------------------------------------------
         // NPC class rebuild
         // -------------------------------------------------------------------------
-        [Tooltip("If enabled, each NPC gets a new class record generated from their actual weapons, armor, and spells. This ensures skill points go to skills they actually use. Unique vendor/crafter NPCs are excluded.")]
+        [Tooltip("If enabled, each NPC gets a new class record generated from their actual weapons, armor, and spells.")]
         public bool RebuildNPCClasses { get; set; } = true;
 
         // -------------------------------------------------------------------------
         // NPC perk distribution
         // -------------------------------------------------------------------------
-        [Tooltip("Perk points given per NPC level, spent in their skill trees respecting skill requirements and perk prerequisites. A level 50 NPC with 0.25 gets ~12 perks. Set to 0 to disable perk distribution entirely.")]
+        [Tooltip("Perk points given per NPC level, spent in their skill trees respecting skill requirements and prerequisites. Set to 0 to disable perk distribution entirely.")]
         public float NPCPerksPerLevel { get; set; } = 0.3f;
 
-        [Tooltip("If enabled, vanilla perks are stripped from NPCs before new ones are distributed. Only removes perks from vanilla ESMs (Skyrim, Dawnguard, Dragonborn). Mod-added perks and racial abilities are preserved. Does not affect followers.")]
+        [Tooltip("If enabled, vanilla perks are stripped from NPCs before new ones are distributed.")]
         public bool RemoveVanillaPerks { get; set; } = true;
 
-        [Tooltip("If enabled, the crExtraDamage perks that give NPCs artificial damage multipliers are cleared so they do nothing. Disable this if you use a mod that relies on those perks for balance (e.g. Requiem, Wildcat).")]
+        [Tooltip("If enabled, the crExtraDamage perks that give NPCs artificial damage multipliers are cleared.")]
         public bool DisableExtraDamagePerks { get; set; } = false;
 
-        [Tooltip("NPCs whose race or own keywords include any keyword on this list will not have their perks redistributed at all. Useful for excluding undead, Dwemer constructs, or other non-humanoid enemies from perk distribution.")]
+        [Tooltip("NPCs whose race or own keywords include any keyword on this list will not have their perks redistributed.")]
         public List<FormLink<IKeywordGetter>> PerkDistributionFilter { get; set; } = new();
 
         // -------------------------------------------------------------------------
         // Auto-leveling system
         // -------------------------------------------------------------------------
-        [Tooltip("The value all tier ranges scale against. Tier 0 (Cosmic, Molag Bal / Daedric Prince level) maps to this ceiling. All other tiers scale proportionally below it. Default is 2000.")]
+        [Tooltip("The value all tier ranges scale against. Tier 0 (Cosmic) maps to this ceiling. All other tiers scale proportionally below it. Default is 2000.")]
         public int TierScalingBase { get; set; } = 2000;
 
-        [Tooltip("The NPC source level at which the above-ceiling multiplier fades to 1.0 (no bonus). NPCs at or above this level get no multiplier inflation on top of their tier range — they are already powerful enough. NPCs between the vanilla ceiling and this value get a smoothly diminishing bonus. Default is 1000.")]
-        public float MultiplierFadeOutLevel { get; set; } = 1000f;
+        [Tooltip("Minimum number of NPCs that must share a faction before that faction is used as a peer group. Factions with fewer members fall back to race-based peers. Default is 3.")]
+        public int FactionMinPeers { get; set; } = 3;
 
-        [Tooltip("The maximum tier multiplier applied to unique NPCs whose source level is just above the vanilla ceiling for their tier. Decays logarithmically toward 1.0 as source level approaches MultiplierFadeOutLevel. Default is 4.0.")]
-        public float MaxTierMultiplier { get; set; } = 4.0f;
-
-        [Tooltip("Minimum number of NPCs that must share a faction before that faction is used as a peer group for percentile scoring. Factions with fewer members fall back to race-based peer comparison. Default is 3.")]
-        public int AutoFactionMinPeers { get; set; } = 3;
-
-        // -------------------------------------------------------------------------
-        // Outlier trimming
-        // -------------------------------------------------------------------------
-        [Tooltip("Trims the most extreme NPC levels from peer group range discovery. 0.05 = ignore the bottom and top 5% of members. Set to 0 to use the absolute min/max.")]
-        public float OutlierPercentileCutoff { get; set; } = 0.05f;
-
-        // -------------------------------------------------------------------------
-        // Name grouping (flat factions only)
-        // -------------------------------------------------------------------------
-        [Tooltip("Prefixes stripped from EditorIDs before extracting a stem name. Used for flat factions (e.g. all dragons at level 100) to identify distinct NPC types so they get different scatter bands. Add mod prefixes here if needed.")]
-        public List<string> StripPrefixes { get; set; } = new()
+        [Tooltip("Boss keyword tokens. NPCs with no source level whose EditorID contains one of these are placed at the top quarter of their tier range instead of the midpoint.")]
+        public List<string> BossTokens { get; set; } = new()
         {
-            // Vanilla and DLC prefixes
-            "Enc", "DLC1", "DLC2", "DLC",
-            // Encounter/world-event prefixes
-            "WE", "dun",
-            // Quest prefixes
-            "MS07", "MS08", "DA13", "DA16",
-            // Mod prefixes
-            "CYR", "zzz", "XMD", "XJK", "000FC",
-            // OGDD (Organized Gameplay - Dragon Diversity)
-            "ogdd_",
-        };
-
-        [Tooltip("Suffixes stripped right-to-left from EditorIDs before extracting a stem. Combat role suffixes (Melee, Archer, Boss) and race suffixes are stripped so e.g. DragonFrostBossNord -> DragonFrost. Add mod suffixes as needed.")]
-        public List<string> StripSuffixes { get; set; } = new()
-        {
-            // Boss variants
-            "BossMagic", "BossMelee", "Boss",
-            // Combat roles
-            "Berserker", "Melee", "Missile", "Magic", "Ranged",
-            "Tank", "Caster", "Archer", "Shield",
-            // Template/spawn markers
-            "Template", "Base", "Spawn",
-            // Gender suffixes
-            "Female", "Male", "F", "M",
-            // Race suffixes
-            "HighElf", "DarkElf", "WoodElf",
-            "Nord", "Imperial", "Breton", "Redguard",
-            "Orc", "Khajiit", "Argonian",
-            // Misc
-            "Captain",
-        };
-
-        [Tooltip("If the stem after stripping exactly matches one of these words (case-insensitive), the NPC is treated as ungrouped — each one forms its own group and scatters independently.")]
-        public List<string> GenericStemWords { get; set; } = new()
-        {
-            "Creature", "Enemy", "NPC", "Actor", "Character",
-            "Monster", "Humanoid", "Generic", "Common", "Standard",
-        };
-
-        [Tooltip("Short words that are still meaningful stems even though they're very brief. Checked before the normal stem extraction. e.g. Bear -> bear stem rather than being truncated further.")]
-        public List<string> ShortStemExceptions { get; set; } = new()
-        {
-            "Orc", "Dog", "Cat", "Fox", "Rat", "Bat", "Cow", "Pig",
-            "Bear", "Wolf", "Deer", "Boar", "Elk",
+            "boss", "chief", "master", "lord", "king", "queen",
+            "elder", "ancient", "arch", "high", "warlord", "deathlord",
         };
 
         // -------------------------------------------------------------------------
         // Weapon / armor stat multipliers
         // -------------------------------------------------------------------------
-        [Tooltip("Multiplier applied to every weapon's base damage, including unique and bound weapons. 1.0 = no change. Example: vanilla damage 10 × 2.0 = 20. Set to 1.0 to disable.")]
+        [Tooltip("Multiplier applied to every weapon's base damage. 1.0 = no change.")]
         public float WeaponDamageMultiplier { get; set; } = 1.0f;
 
-        [Tooltip("Multiplier applied to every heavy armor piece's armor rating. 1.0 = no change. Example: vanilla rating 100 × 1.5 = 150. Set to 1.0 to disable.")]
+        [Tooltip("Multiplier applied to every heavy armor piece's armor rating. 1.0 = no change.")]
         public float HeavyArmorRatingMultiplier { get; set; } = 1.0f;
 
-        [Tooltip("Multiplier applied to every light armor piece's armor rating. 1.0 = no change. Example: vanilla rating 60 × 1.5 = 90. Set to 1.0 to disable.")]
+        [Tooltip("Multiplier applied to every light armor piece's armor rating. 1.0 = no change.")]
         public float LightArmorRatingMultiplier { get; set; } = 1.0f;
 
-        [Tooltip("Multiplier applied to every shield's armor rating. 1.0 = no change. Example: vanilla rating 20 × 2.0 = 40. Set to 1.0 to disable.")]
+        [Tooltip("Multiplier applied to every shield's armor rating. 1.0 = no change.")]
         public float ShieldArmorRatingMultiplier { get; set; } = 1.0f;
 
-        [Tooltip("Multiplier applied to every ammo record's damage (arrows, bolts, etc.). 1.0 = no change. Example: vanilla damage 10 × 2.0 = 20. Set to 1.0 to disable.")]
+        [Tooltip("Multiplier applied to every ammo record's damage. 1.0 = no change.")]
         public float AmmoDamageMultiplier { get; set; } = 1.0f;
 
         // -------------------------------------------------------------------------
-        // Race spell / melee damage multipliers (per tier)
+        // Race melee damage multipliers (per tier)
         // -------------------------------------------------------------------------
-        [Tooltip("If enabled, each race record gets its spell damage and melee attack damage multipliers set according to the per-tier tables below. Humanoid races (tier 12-14) are always left at 1.0.")]
+        [Tooltip("If enabled, each race record gets its unarmed damage scaled according to the per-tier table below. Humanoid races are always left at 1.0.")]
         public bool ScaleRaceDamage { get; set; } = true;
 
-        [Tooltip("Spell damage multiplier per tier (0=Cosmic … 14=Vermin). Applied to the race SpellDamageMult field. Tiers 12-14 are always 1.0 regardless of this value.")]
+        [Tooltip("Spell damage multiplier per tier (0=Cosmic … 14=Vermin). Tiers 12-14 are always 1.0.")]
         public List<float> SpellDamageTierMultipliers { get; set; } = new()
         {
             12.0f, // 0  Cosmic
@@ -188,10 +122,10 @@ namespace SkyrimReleveler
              6.0f, // 3  Dragon Priest / Lich
              5.0f, // 4  High Daedra
              4.5f, // 5  Vampire Lord / Soul Cairn
-             1.0f, // 6  Elite Construct   — no magic
+             1.0f, // 6  Elite Construct
              3.5f, // 7  Falmer / Mid Daedra
              4.0f, // 8  Vampire / Werewolf
-             4.0f, // 9  Draugr / Atronach — atronachs are pure magic
+             4.0f, // 9  Draugr / Atronach
              3.0f, // 10 Spriggan / Hagrave
              2.0f, // 11 Dangerous Wildlife
              1.0f, // 12 Humanoid
@@ -199,41 +133,24 @@ namespace SkyrimReleveler
              1.0f, // 14 Vermin
         };
 
-        [Tooltip("Melee attack damage multiplier per tier (0=Cosmic … 14=Vermin). Applied to the race AttackDamageMult field. Tiers 12-14 are always 1.0 regardless of this value.")]
+        [Tooltip("Melee attack damage multiplier per tier (0=Cosmic … 14=Vermin). Tiers 12-14 are always 1.0.")]
         public List<float> MeleeDamageTierMultipliers { get; set; } = new()
         {
             12.0f, // 0  Cosmic
             10.0f, // 1  World-ender
-             8.0f, // 2  Dragon            — physically enormous
-             3.0f, // 3  Dragon Priest / Lich — primarily casters
-             5.0f, // 4  High Daedra       — Dremora are fierce warriors
-             4.0f, // 5  Vampire Lord      — powerful physical form
-             6.0f, // 6  Elite Construct   — Centurions devastate in melee
+             8.0f, // 2  Dragon
+             3.0f, // 3  Dragon Priest / Lich
+             5.0f, // 4  High Daedra
+             4.0f, // 5  Vampire Lord
+             6.0f, // 6  Elite Construct
              3.5f, // 7  Falmer / Mid Daedra
              3.5f, // 8  Vampire / Werewolf
              2.5f, // 9  Draugr / Atronach
              2.5f, // 10 Spriggan / Hagrave
-             3.0f, // 11 Dangerous Wildlife — bears/sabrecats hit hard
+             3.0f, // 11 Dangerous Wildlife
              1.0f, // 12 Humanoid
              1.0f, // 13 Standard Creature
              1.0f, // 14 Vermin
-        };
-
-        // -------------------------------------------------------------------------
-        // Boss keyword bonus
-        // -------------------------------------------------------------------------
-        [Tooltip("If enabled, NPCs whose EditorID contains a matching bonus keyword get their final level boosted by the configured percentage.")]
-        public bool EnableBonusKeywords { get; set; } = true;
-
-        [Tooltip("List of EditorID keyword -> bonus percent pairs. Boss NPCs get +25% by default. Add more entries for other special NPC types.")]
-        public List<BonusKeyword> BonusKeywords { get; set; } = new()
-        {
-            new BonusKeyword { Keyword = "Boss",       BonusPercent = 25f },
-            new BonusKeyword { Keyword = "Chief",      BonusPercent = 20f },
-            new BonusKeyword { Keyword = "Warlord",    BonusPercent = 15f },
-            new BonusKeyword { Keyword = "Briarheart", BonusPercent = 20f },
-            new BonusKeyword { Keyword = "Deathlord",  BonusPercent = 15f },
-            new BonusKeyword { Keyword = "Master",     BonusPercent = 10f },
         };
     }
 }
