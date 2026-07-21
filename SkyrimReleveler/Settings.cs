@@ -50,13 +50,13 @@ namespace SkyrimReleveler
         public bool ScaleFollowers { get; set; } = true;
 
         [Tooltip("The assumed level used to calculate how many perks followers receive. Since followers scale with the player instead of having a fixed level, this value is used as a stand-in for perk budget. Default is 100. Set to 0 to give followers no perks.")]
-        public int FollowerPerkLevel { get; set; } = 100;
+        public int FollowerPerkLevel { get; set; } = 500;
 
         // -------------------------------------------------------------------------
         // NPC skill redistribution
         // -------------------------------------------------------------------------
         [Tooltip("Skill points given to each NPC per level, distributed across their skill trees based on class weights. A level 50 NPC with 2.5 gets 125 total points. Set to 0 to leave NPC skills at their original values.")]
-        public float NPCSkillsPerLevel { get; set; } = 2.5f;
+        public float NPCSkillsPerLevel { get; set; } = 0.7f;
 
         [Tooltip("The maximum level any individual NPC skill can reach. Raising this above 100 allows very high level NPCs to exceed the normal cap in their primary skills.")]
         public byte NPCMaxSkillLevel { get; set; } = 100;
@@ -71,7 +71,7 @@ namespace SkyrimReleveler
         // NPC perk distribution
         // -------------------------------------------------------------------------
         [Tooltip("Perk points given per NPC level, spent in their skill trees respecting skill requirements and perk prerequisites. A level 50 NPC with 0.25 gets ~12 perks. Set to 0 to disable perk distribution entirely.")]
-        public float NPCPerksPerLevel { get; set; } = 0.25f;
+        public float NPCPerksPerLevel { get; set; } = 0.18f;
 
         [Tooltip("If enabled, vanilla perks are stripped from NPCs before new ones are distributed. Only removes perks from vanilla ESMs (Skyrim, Dawnguard, Dragonborn). Mod-added perks and racial abilities are preserved. Does not affect followers.")]
         public bool RemoveVanillaPerks { get; set; } = true;
@@ -128,16 +128,17 @@ namespace SkyrimReleveler
             "BossMagic", "BossMelee", "Boss",
             // Combat roles
             "Berserker", "Melee", "Missile", "Magic", "Ranged",
-            "Tank", "Caster", "Archer", "Shield", "Warrior",
-            "Assassin", "Rogue", "Mage", "Necromancer",
+            "Tank", "Caster", "Archer", "Shield",
             // Template/spawn markers
-            "Template", "Base", "Spawn", "NoScript", "Leveled",
+            "Template", "Base", "Spawn",
             // Gender suffixes
-            "Female", "Male",
+            "Female", "Male", "F", "M",
             // Race suffixes
             "HighElf", "DarkElf", "WoodElf",
             "Nord", "Imperial", "Breton", "Redguard",
             "Orc", "Khajiit", "Argonian",
+            // Misc
+            "Captain",
         };
 
         [Tooltip("If the stem after stripping exactly matches one of these words (case-insensitive), the NPC is treated as ungrouped — each one forms its own group and scatters independently.")]
@@ -181,12 +182,12 @@ namespace SkyrimReleveler
         [Tooltip("List of EditorID keyword -> bonus percent pairs. Boss NPCs get +25% by default. Add more entries for other special NPC types.")]
         public List<BonusKeyword> BonusKeywords { get; set; } = new()
         {
-            new BonusKeyword { Keyword = "Boss",      BonusPercent = 25f },
-            new BonusKeyword { Keyword = "Chief",     BonusPercent = 20f },
-            new BonusKeyword { Keyword = "Warlord",   BonusPercent = 15f },
+            new BonusKeyword { Keyword = "Boss",       BonusPercent = 25f },
+            new BonusKeyword { Keyword = "Chief",      BonusPercent = 20f },
+            new BonusKeyword { Keyword = "Warlord",    BonusPercent = 15f },
             new BonusKeyword { Keyword = "Briarheart", BonusPercent = 20f },
-            new BonusKeyword { Keyword = "Deathlord", BonusPercent = 15f },
-            new BonusKeyword { Keyword = "Master",    BonusPercent = 10f },
+            new BonusKeyword { Keyword = "Deathlord",  BonusPercent = 15f },
+            new BonusKeyword { Keyword = "Master",     BonusPercent = 10f },
         };
     }
 }
