@@ -661,8 +661,15 @@ namespace SkyrimReleveler
             w.ForEach(x => w[x.Key] = (float)Math.Ceiling(x.Value));
             if (w.All(x => x.Value == 0)) return false;
 
-            var newClass = state.PatchMod.Classes.GetOrAddAsOverride(cls);
+            var newClass = state.PatchMod.Classes.AddNew();
             newClass.EditorID = "SRClass" + npc.EditorID;
+            // Copy the fields CalculateClassWeights and perk distribution need
+            if (cls.Name is not null) newClass.Name = cls.Name.DeepCopy();
+            newClass.StatWeights[BasicStat.Health]  = cls.StatWeights[BasicStat.Health];
+            newClass.StatWeights[BasicStat.Magicka] = cls.StatWeights[BasicStat.Magicka];
+            newClass.StatWeights[BasicStat.Stamina] = cls.StatWeights[BasicStat.Stamina];
+            foreach (var sw in cls.SkillWeights)
+                newClass.SkillWeights[sw.Key] = sw.Value;
             npc.Class = newClass.ToLink();
             CalculateClassWeights(newClass, w);
             newClass.SkillWeights.ForEach(x => newClass.SkillWeights[x.Key] = 0);

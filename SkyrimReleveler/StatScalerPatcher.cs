@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using Mutagen.Bethesda;
-using Mutagen.Bethesda.Plugins;
 using Mutagen.Bethesda.Synthesis;
 using Mutagen.Bethesda.Skyrim;
 using Mutagen.Bethesda.FormKeys.SkyrimSE;
@@ -137,128 +136,6 @@ namespace SkyrimReleveler
                 }
                 Console.WriteLine($"  StatScaler: {patched} ammo records patched.");
             }
-
-            // -----------------------------------------------------------------------
-            // Race unarmed/melee damage multipliers (per tier)
-            //
-            // Applies to the UnarmedDamage field on race records — the base unarmed
-            // hit damage for that race. Scaled by the MeleeDamageTierMultipliers array.
-            //
-            // SpellDamageTierMultipliers is defined in settings for future use but
-            // Mutagen does not expose SpellDamageMult/AttackDamageMult as writable
-            // properties (they live in a custom binary Flags2 block). If spell scaling
-            // is needed, use crNerfDamage perks or Game Setting edits instead.
-            // -----------------------------------------------------------------------
-            if (settings.ScaleRaceDamage)
-            {
-                var meleeMults = settings.MeleeDamageTierMultipliers;
-                while (meleeMults.Count < TierSystem.Count) meleeMults.Add(1.0f);
-
-                int racesPatched = 0;
-                foreach (var ctx in state.LoadOrder.PriorityOrder.Race().WinningContextOverrides())
-                {
-                    var race = ctx.Record;
-
-                    // Skip player race and all humanoid NPC races
-                    if (race.HasKeyword(Skyrim.Keyword.PlayerKeyword)) continue;
-                    if (race.HasKeyword(Skyrim.Keyword.ActorTypeNPC))  continue;
-
-                    int tier = ClassifyRaceTier(race);
-                    if (tier >= 12) continue;
-
-                    float meleeMult = meleeMults[tier];
-                    if (Math.Abs(meleeMult - 1.0f) <= 0.0001f) continue;
-
-                    float originalUnarmed = race.UnarmedDamage;
-                    // Many creature races have UnarmedDamage = 0 (they use attack data instead).
-                    // Only scale if there's an authored value to multiply.
-                    if (originalUnarmed <= 0f) continue;
-
-                    float newUnarmed = ClampFloat(originalUnarmed * meleeMult);
-                    if (Math.Abs(newUnarmed - originalUnarmed) < 0.001f) continue;
-
-                    var raceOverride = ctx.GetOrAddAsOverride(state.PatchMod);
-                    raceOverride.UnarmedDamage = newUnarmed;
-                    racesPatched++;
-                }
-
-                Console.WriteLine($"  StatScaler: {racesPatched} race records patched with unarmed damage multipliers.");
-            }
-        }
-
-        /// <summary>
-        /// Classifies a race record into a tier (0-14) using keyword and EditorID matching,
-        /// mirroring the logic in Program.ClassifyByRaceKeyword.
-        /// </summary>
-        private static int ClassifyRaceTier(IRaceGetter race)
-        {
-            string? raceId = race.EditorID;
-
-            if (race.HasKeyword(Skyrim.Keyword.ActorTypeDragon))
-            {
-                if (raceId?.Equals("AlduinRace", StringComparison.OrdinalIgnoreCase) == true) return 1;
-                return 2;
-            }
-
-            if (race.HasKeyword(Skyrim.Keyword.ActorTypeDaedra))
-            {
-                if (ContainsAny(raceId, "Scamp", "Clannfear", "Daedroth", "Grummite",
-                                        "Balliwog", "Banekin", "SpiderDaedra", "Watcher"))
-                    return 7;
-                return 4;
-            }
-
-            if (race.HasKeyword(Skyrim.Keyword.ActorTypeUndead))
-            {
-                if (ContainsAny(raceId, "VampireLord", "VampireBeast", "SoulCairn", "IdealMaster")) return 5;
-                if (ContainsAny(raceId, "Lich", "DragonPriest", "BoneLord", "WraithKnight",
-                                        "WraithLord", "WraithWitch", "WraithArchwitch"))            return 3;
-                if (ContainsAny(raceId, "HulkingDraugr", "DraugrJyrik", "SkeletonGoliath",
-                                        "BoneColossus", "BoneHulk"))                                return 6;
-                return 9;
-            }
-
-            if (race.HasKeyword(Skyrim.Keyword.ActorTypeDwarven))
-            {
-                if (ContainsAny(raceId, "Centurion", "Forgemaster", "Colossus", "Golem",
-                                        "DweKnight", "DweQueen", "DweSoldier"))                     return 6;
-                return 9;
-            }
-
-            if (race.HasKeyword(Skyrim.Keyword.ActorTypeGhost)) return 9;
-
-            if (ContainsAny(raceId, "Werewolf", "Werebear", "Werebat")) return 8;
-
-            if (race.HasKeyword(Skyrim.Keyword.ActorTypeNPC)) return 12;
-
-            // Creatures — classify by EditorID
-            if (ContainsAny(raceId, "Mammoth", "Giant", "Troll", "Hagrave", "Spriggan",
-                                    "Chaurus", "Falmer", "Lurker", "Dreugh", "Griffon",
-                                    "Gorgon", "Minotaur", "Ogre", "Wendigo", "Elytra"))
-                return 7;
-
-            if (ContainsAny(raceId, "Wispmother", "WillOWisp")) return 10;
-
-            if (ContainsAny(raceId, "Bear", "Sabrecat", "Wolf", "Spider", "DeathHound",
-                                    "Gargoyle", "IceWraith", "Wisp", "Raptor", "Panther",
-                                    "Lion", "Hyena", "Tiger", "Horker", "Slaughterfish",
-                                    "Mudcrab", "Frostbite", "Skeever", "Riekling"))
-                return 11;
-
-            if (ContainsAny(raceId, "Rat", "Dog", "Horse", "Goat", "Sheep", "Cow",
-                                    "Chicken", "Rabbit", "Deer", "Elk", "Fox", "Hare",
-                                    "Pig", "Goose", "Crab", "Reindeer", "Netch", "Boar"))
-                return 14;
-
-            return 13;
-        }
-
-        private static bool ContainsAny(string? s, params string[] patterns)
-        {
-            if (s is null) return false;
-            foreach (var p in patterns)
-                if (s.Contains(p, StringComparison.OrdinalIgnoreCase)) return true;
-            return false;
         }
 
         private static ushort ClampUshort(int value) =>

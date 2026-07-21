@@ -106,51 +106,5 @@ namespace SkyrimReleveler
 
         [Tooltip("Multiplier applied to every ammo record's damage. 1.0 = no change.")]
         public float AmmoDamageMultiplier { get; set; } = 1.0f;
-
-        // -------------------------------------------------------------------------
-        // Race melee damage multipliers (per tier)
-        // -------------------------------------------------------------------------
-        [Tooltip("If enabled, each race record gets its unarmed damage scaled according to the per-tier table below. Humanoid races are always left at 1.0.")]
-        public bool ScaleRaceDamage { get; set; } = true;
-
-        [Tooltip("Spell damage multiplier per tier (0=Cosmic … 14=Vermin). Tiers 12-14 are always 1.0.")]
-        public List<float> SpellDamageTierMultipliers { get; set; } = new()
-        {
-            12.0f, // 0  Cosmic
-            10.0f, // 1  World-ender
-             7.0f, // 2  Dragon
-             6.0f, // 3  Dragon Priest / Lich
-             5.0f, // 4  High Daedra
-             4.5f, // 5  Vampire Lord / Soul Cairn
-             1.0f, // 6  Elite Construct
-             3.5f, // 7  Falmer / Mid Daedra
-             4.0f, // 8  Vampire / Werewolf
-             4.0f, // 9  Draugr / Atronach
-             3.0f, // 10 Spriggan / Hagrave
-             2.0f, // 11 Dangerous Wildlife
-             1.0f, // 12 Humanoid
-             1.0f, // 13 Standard Creature
-             1.0f, // 14 Vermin
-        };
-
-        [Tooltip("Melee attack damage multiplier per tier (0=Cosmic … 14=Vermin). Tiers 12-14 are always 1.0.")]
-        public List<float> MeleeDamageTierMultipliers { get; set; } = new()
-        {
-            12.0f, // 0  Cosmic
-            10.0f, // 1  World-ender
-             8.0f, // 2  Dragon
-             3.0f, // 3  Dragon Priest / Lich
-             5.0f, // 4  High Daedra
-             4.0f, // 5  Vampire Lord
-             6.0f, // 6  Elite Construct
-             3.5f, // 7  Falmer / Mid Daedra
-             3.5f, // 8  Vampire / Werewolf
-             2.5f, // 9  Draugr / Atronach
-             2.5f, // 10 Spriggan / Hagrave
-             3.0f, // 11 Dangerous Wildlife
-             1.0f, // 12 Humanoid
-             1.0f, // 13 Standard Creature
-             1.0f, // 14 Vermin
-        };
     }
 }
