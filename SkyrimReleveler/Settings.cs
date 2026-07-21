@@ -71,7 +71,7 @@ namespace SkyrimReleveler
         // NPC perk distribution
         // -------------------------------------------------------------------------
         [Tooltip("Perk points given per NPC level, spent in their skill trees respecting skill requirements and perk prerequisites. A level 50 NPC with 0.25 gets ~12 perks. Set to 0 to disable perk distribution entirely.")]
-        public float NPCPerksPerLevel { get; set; } = 0.18f;
+        public float NPCPerksPerLevel { get; set; } = 0.3f;
 
         [Tooltip("If enabled, vanilla perks are stripped from NPCs before new ones are distributed. Only removes perks from vanilla ESMs (Skyrim, Dawnguard, Dragonborn). Mod-added perks and racial abilities are preserved. Does not affect followers.")]
         public bool RemoveVanillaPerks { get; set; } = true;
