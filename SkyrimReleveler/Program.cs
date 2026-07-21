@@ -1719,9 +1719,11 @@ namespace SkyrimReleveler
                     // (could be from a previous patcher run and inflated)
                     if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
                     ApplyLevel(npcCopy, fixedLevel);
-                    // Clear Stats and SpellList template flags so skills/perks redistribute at named level
+                    // Clear Stats, SpellList and Traits template flags so the rebuilt class,
+                    // skills and perks all take effect at the named level.
                     npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
                     npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
+                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
                     wasChanged = true;
                     ++namedCount;
                 }
@@ -1774,9 +1776,11 @@ namespace SkyrimReleveler
                     if (Settings.PrintDebugOutput)
                         Console.WriteLine($"    -> final {newLevel} (offset={Settings.GlobalOffset}, raceMult={rMult}, raceAdd={rAdd}, bonus={bonusPct}%)");
                     ApplyLevel(npcCopy, newLevel);
-                    // Clear Stats and SpellList template flags so skills/perks redistribute at new level
+                    // Clear Stats, SpellList and Traits template flags so the rebuilt class,
+                    // skills and perks all take effect at the new level.
                     npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
                     npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
+                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
                     wasChanged = true;
                     ++pipelineCount;
                 }

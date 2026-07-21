@@ -1,19 +1,23 @@
 using System;
+using System.Linq;
+using Mutagen.Bethesda;
+using Mutagen.Bethesda.Plugins;
 using Mutagen.Bethesda.Synthesis;
 using Mutagen.Bethesda.Skyrim;
 using Mutagen.Bethesda.FormKeys.SkyrimSE;
+using Noggog;
 
 namespace SkyrimReleveler
 {
     /// <summary>
-    /// Applies global multipliers to weapon damage, armor/shield ratings, and ammo damage.
-    /// Logic: finalValue = Round(vanillaValue * multiplier), clamped to [0, 60000].
-    /// Any multiplier of exactly 1.0 is a no-op — that category is skipped entirely.
+    /// Applies global multipliers to weapon damage, armor/shield ratings, ammo damage,
+    /// and per-tier unarmed/melee damage multipliers to race records.
     ///
-    /// Uses WinningContextOverrides throughout so every record is fully resolved —
-    /// partial overrides (e.g. USSEP touching only a script flag) never cause a stat
-    /// to be silently skipped. GetOrAddAsOverride on the context writes cleanly to the
-    /// patch mod without duplicating work.
+    /// NOTE: Skyrim's SpellDamageMult and AttackDamageMult race fields are stored in a
+    /// custom binary block (Flags2/DATA) that Mutagen does not expose as named properties.
+    /// The only directly writable combat multiplier on a Race record via Mutagen is
+    /// UnarmedDamage (base unarmed damage value). For spell and general attack scaling,
+    /// use the crNerfDamage perk system or Game Setting tweaks instead.
     /// </summary>
     public static class StatScalerPatcher
     {
@@ -24,12 +28,6 @@ namespace SkyrimReleveler
             bool patchLight   = Math.Abs(settings.LightArmorRatingMultiplier  - 1.0f) > 0.0001f;
             bool patchShield  = Math.Abs(settings.ShieldArmorRatingMultiplier - 1.0f) > 0.0001f;
             bool patchAmmo    = Math.Abs(settings.AmmoDamageMultiplier        - 1.0f) > 0.0001f;
-
-            if (!patchWeapons && !patchHeavy && !patchLight && !patchShield && !patchAmmo)
-            {
-                Console.WriteLine("  StatScaler: all multipliers are 1.0 — skipping weapon/armor patching.");
-                return;
-            }
 
             // -----------------------------------------------------------------------
             // Weapons — scale BasicStats.Damage
@@ -43,31 +41,23 @@ namespace SkyrimReleveler
                 foreach (var ctx in state.LoadOrder.PriorityOrder.Weapon().WinningContextOverrides())
                 {
                     var weapon = ctx.Record;
-
-                    if (weapon.BasicStats == null)
-                        continue;
+                    if (weapon.BasicStats == null) continue;
 
                     ushort originalDamage = weapon.BasicStats.Damage;
-
-                    // 0-damage: staves, torches, placeholders
-                    if (originalDamage == 0)
-                        continue;
+                    if (originalDamage == 0) continue;
 
                     ushort newDamage = ClampUshort((int)Math.Round(originalDamage * mult));
-                    if (newDamage == originalDamage)
-                        continue;
+                    if (newDamage == originalDamage) continue;
 
                     var weaponOverride = ctx.GetOrAddAsOverride(state.PatchMod);
                     weaponOverride.BasicStats!.Damage = newDamage;
                     patched++;
                 }
-
                 Console.WriteLine($"  StatScaler: {patched} weapons patched.");
             }
 
             // -----------------------------------------------------------------------
             // Armor and Shields — scale ArmorRating
-            // Shields: ArmorShield keyword. Heavy/light: ArmorHeavy / ArmorLight.
             // -----------------------------------------------------------------------
             if (patchHeavy || patchLight || patchShield)
             {
@@ -79,26 +69,17 @@ namespace SkyrimReleveler
                 if (patchLight)  Console.WriteLine($"  StatScaler: applying light armor rating multiplier ×{lightMult:F4}");
                 if (patchShield) Console.WriteLine($"  StatScaler: applying shield armor rating multiplier ×{shieldMult:F4}");
 
-                int heavyPatched  = 0;
-                int lightPatched  = 0;
-                int shieldPatched = 0;
+                int heavyPatched = 0, lightPatched = 0, shieldPatched = 0;
 
                 foreach (var ctx in state.LoadOrder.PriorityOrder.Armor().WinningContextOverrides())
                 {
                     var armor = ctx.Record;
-
-                    if (armor.Keywords == null)
-                        continue;
+                    if (armor.Keywords == null) continue;
 
                     float originalRating = armor.ArmorRating;
-                    if (originalRating <= 0f)
-                        continue;
+                    if (originalRating <= 0f) continue;
 
-                    // Determine type — shield takes priority over heavy/light
-                    bool isShield = false;
-                    bool isHeavy  = false;
-                    bool isLight  = false;
-
+                    bool isShield = false, isHeavy = false, isLight = false;
                     foreach (var kwLink in armor.Keywords)
                     {
                         if      (kwLink.Equals(Skyrim.Keyword.ArmorShield)) { isShield = true; break; }
@@ -106,20 +87,16 @@ namespace SkyrimReleveler
                         else if (kwLink.Equals(Skyrim.Keyword.ArmorLight))  { isLight  = true; }
                     }
 
-                    float mult;
-                    bool  shouldPatch;
-
+                    float mult; bool shouldPatch;
                     if      (isShield) { mult = shieldMult; shouldPatch = patchShield; }
                     else if (isHeavy)  { mult = heavyMult;  shouldPatch = patchHeavy;  }
                     else if (isLight)  { mult = lightMult;  shouldPatch = patchLight;  }
-                    else continue; // clothing or untyped — skip
+                    else continue;
 
-                    if (!shouldPatch)
-                        continue;
+                    if (!shouldPatch) continue;
 
                     float newRating = ClampFloat((float)Math.Round(originalRating * mult));
-                    if (Math.Abs(newRating - originalRating) < 0.01f)
-                        continue;
+                    if (Math.Abs(newRating - originalRating) < 0.01f) continue;
 
                     var armorOverride = ctx.GetOrAddAsOverride(state.PatchMod);
                     armorOverride.ArmorRating = newRating;
@@ -135,7 +112,7 @@ namespace SkyrimReleveler
             }
 
             // -----------------------------------------------------------------------
-            // Ammo — scale Damage (arrows, bolts, etc.)
+            // Ammo — scale Damage
             // -----------------------------------------------------------------------
             if (patchAmmo)
             {
@@ -146,25 +123,142 @@ namespace SkyrimReleveler
                 foreach (var ctx in state.LoadOrder.PriorityOrder.Ammunition().WinningContextOverrides())
                 {
                     var ammo = ctx.Record;
-
-                    if (ammo.Flags.HasFlag(Ammunition.Flag.NonPlayable))
-                        continue;
+                    if (ammo.Flags.HasFlag(Ammunition.Flag.NonPlayable)) continue;
 
                     float originalDamage = ammo.Damage;
-                    if (originalDamage <= 0f)
-                        continue;
+                    if (originalDamage <= 0f) continue;
 
                     float newDamage = ClampFloat((float)Math.Round(originalDamage * mult, 2));
-                    if (Math.Abs(newDamage - originalDamage) < 0.001f)
-                        continue;
+                    if (Math.Abs(newDamage - originalDamage) < 0.001f) continue;
 
                     var ammoOverride = ctx.GetOrAddAsOverride(state.PatchMod);
                     ammoOverride.Damage = newDamage;
                     patched++;
                 }
-
                 Console.WriteLine($"  StatScaler: {patched} ammo records patched.");
             }
+
+            // -----------------------------------------------------------------------
+            // Race unarmed/melee damage multipliers (per tier)
+            //
+            // Applies to the UnarmedDamage field on race records — the base unarmed
+            // hit damage for that race. Scaled by the MeleeDamageTierMultipliers array.
+            //
+            // SpellDamageTierMultipliers is defined in settings for future use but
+            // Mutagen does not expose SpellDamageMult/AttackDamageMult as writable
+            // properties (they live in a custom binary Flags2 block). If spell scaling
+            // is needed, use crNerfDamage perks or Game Setting edits instead.
+            // -----------------------------------------------------------------------
+            if (settings.ScaleRaceDamage)
+            {
+                var meleeMults = settings.MeleeDamageTierMultipliers;
+                while (meleeMults.Count < TierSystem.Count) meleeMults.Add(1.0f);
+
+                int racesPatched = 0;
+                foreach (var ctx in state.LoadOrder.PriorityOrder.Race().WinningContextOverrides())
+                {
+                    var race = ctx.Record;
+
+                    // Skip player race and all humanoid NPC races
+                    if (race.HasKeyword(Skyrim.Keyword.PlayerKeyword)) continue;
+                    if (race.HasKeyword(Skyrim.Keyword.ActorTypeNPC))  continue;
+
+                    int tier = ClassifyRaceTier(race);
+                    if (tier >= 12) continue;
+
+                    float meleeMult = meleeMults[tier];
+                    if (Math.Abs(meleeMult - 1.0f) <= 0.0001f) continue;
+
+                    float originalUnarmed = race.UnarmedDamage;
+                    // Many creature races have UnarmedDamage = 0 (they use attack data instead).
+                    // Only scale if there's an authored value to multiply.
+                    if (originalUnarmed <= 0f) continue;
+
+                    float newUnarmed = ClampFloat(originalUnarmed * meleeMult);
+                    if (Math.Abs(newUnarmed - originalUnarmed) < 0.001f) continue;
+
+                    var raceOverride = ctx.GetOrAddAsOverride(state.PatchMod);
+                    raceOverride.UnarmedDamage = newUnarmed;
+                    racesPatched++;
+                }
+
+                Console.WriteLine($"  StatScaler: {racesPatched} race records patched with unarmed damage multipliers.");
+            }
+        }
+
+        /// <summary>
+        /// Classifies a race record into a tier (0-14) using keyword and EditorID matching,
+        /// mirroring the logic in Program.ClassifyByRaceKeyword.
+        /// </summary>
+        private static int ClassifyRaceTier(IRaceGetter race)
+        {
+            string? raceId = race.EditorID;
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeDragon))
+            {
+                if (raceId?.Equals("AlduinRace", StringComparison.OrdinalIgnoreCase) == true) return 1;
+                return 2;
+            }
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeDaedra))
+            {
+                if (ContainsAny(raceId, "Scamp", "Clannfear", "Daedroth", "Grummite",
+                                        "Balliwog", "Banekin", "SpiderDaedra", "Watcher"))
+                    return 7;
+                return 4;
+            }
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeUndead))
+            {
+                if (ContainsAny(raceId, "VampireLord", "VampireBeast", "SoulCairn", "IdealMaster")) return 5;
+                if (ContainsAny(raceId, "Lich", "DragonPriest", "BoneLord", "WraithKnight",
+                                        "WraithLord", "WraithWitch", "WraithArchwitch"))            return 3;
+                if (ContainsAny(raceId, "HulkingDraugr", "DraugrJyrik", "SkeletonGoliath",
+                                        "BoneColossus", "BoneHulk"))                                return 6;
+                return 9;
+            }
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeDwarven))
+            {
+                if (ContainsAny(raceId, "Centurion", "Forgemaster", "Colossus", "Golem",
+                                        "DweKnight", "DweQueen", "DweSoldier"))                     return 6;
+                return 9;
+            }
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeGhost)) return 9;
+
+            if (ContainsAny(raceId, "Werewolf", "Werebear", "Werebat")) return 8;
+
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeNPC)) return 12;
+
+            // Creatures — classify by EditorID
+            if (ContainsAny(raceId, "Mammoth", "Giant", "Troll", "Hagrave", "Spriggan",
+                                    "Chaurus", "Falmer", "Lurker", "Dreugh", "Griffon",
+                                    "Gorgon", "Minotaur", "Ogre", "Wendigo", "Elytra"))
+                return 7;
+
+            if (ContainsAny(raceId, "Wispmother", "WillOWisp")) return 10;
+
+            if (ContainsAny(raceId, "Bear", "Sabrecat", "Wolf", "Spider", "DeathHound",
+                                    "Gargoyle", "IceWraith", "Wisp", "Raptor", "Panther",
+                                    "Lion", "Hyena", "Tiger", "Horker", "Slaughterfish",
+                                    "Mudcrab", "Frostbite", "Skeever", "Riekling"))
+                return 11;
+
+            if (ContainsAny(raceId, "Rat", "Dog", "Horse", "Goat", "Sheep", "Cow",
+                                    "Chicken", "Rabbit", "Deer", "Elk", "Fox", "Hare",
+                                    "Pig", "Goose", "Crab", "Reindeer", "Netch", "Boar"))
+                return 14;
+
+            return 13;
+        }
+
+        private static bool ContainsAny(string? s, params string[] patterns)
+        {
+            if (s is null) return false;
+            foreach (var p in patterns)
+                if (s.Contains(p, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
         }
 
         private static ushort ClampUshort(int value) =>
