@@ -55,7 +55,7 @@ namespace SkyrimReleveler
             ( 60,  140), // 9  Draugr / Atronach / Skeleton Lord
             ( 45,  110), // 10 Spriggan / Hagrave / Troll
             ( 30,   80), // 11 Dangerous Wildlife
-            ( 15,  120), // 12 Humanoid Enemy
+            ( 35,  120), // 12 Humanoid Enemy
             ( 10,   60), // 13 Standard Creature
             (  1,   20), // 14 Vermin / Passive Animal
         };
@@ -579,8 +579,14 @@ namespace SkyrimReleveler
             if (Settings.NPCSkillsPerLevel <= 0) return false;
             if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Stats) && !npc.Template.IsNull)
                 return false;
-            if (npc.PlayerSkills is null || npc.Configuration.Level is not NpcLevel npcLevel) return false;
+            if (npc.Configuration.Level is not NpcLevel npcLevel) return false;
             if (!npc.Class.TryResolve(linkCache, out var classGetter)) return false;
+
+            // If PlayerSkills is null the Stats template flag was cleared but no skill
+            // block exists yet — initialize one so DistributeSkills has somewhere to write.
+            if (npc.PlayerSkills is null)
+                npc.PlayerSkills = new PlayerSkills();
+
             DistributeSkills(classGetter.SkillWeights, npc.PlayerSkills.SkillValues,
                 (int)Math.Round(Settings.NPCSkillsPerLevel * npcLevel.Level));
             return true;
@@ -882,12 +888,16 @@ namespace SkyrimReleveler
         {
             if (Settings.NPCPerksPerLevel <= 0) return false;
             if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.SpellList) && !npc.Template.IsNull) return false;
-            if (npc.PlayerSkills is null) return false;
             if (!npc.Class.TryResolve<IClassGetter>(lc, out var cls)) return false;
             if (!npc.Race.TryResolve<IRaceGetter>(lc, out var race)) return false;
             if (!race.HasKeyword(Skyrim.Keyword.ActorTypeNPC) && !race.HasKeyword(Skyrim.Keyword.ActorTypeUndead)) return false;
             foreach (var kw in Settings.PerkDistributionFilter)
                 if (npc.HasKeyword(kw) || race.HasKeyword(kw)) return false;
+
+            // If PlayerSkills is null (Stats template flag was cleared but no skill block exists),
+            // initialize one so perk condition checks have skill values to read.
+            if (npc.PlayerSkills is null)
+                npc.PlayerSkills = new PlayerSkills();
 
             float perksTotal = Settings.NPCPerksPerLevel;
             if (npc.Configuration.Level is NpcLevel nl)
