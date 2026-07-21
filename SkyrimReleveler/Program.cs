@@ -896,7 +896,8 @@ namespace SkyrimReleveler
             foreach (var pw in perkDist)
             {
                 if (pw.Value <= 0) continue;
-                byte toSpend = (byte)Math.Round(overflow + perksTotal * (pw.Value / wSum));
+                // Use int instead of byte — byte overflows at 255 for high-level NPCs
+                int toSpend = (int)Math.Round(overflow + perksTotal * (pw.Value / wSum));
                 if (toSpend <= 0) continue;
                 if (!GetTreeFromSkill(pw.Key, lc, out var tree) || tree!.PerkTree is null) continue;
 
@@ -1694,8 +1695,9 @@ namespace SkyrimReleveler
                     // (could be from a previous patcher run and inflated)
                     if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
                     ApplyLevel(npcCopy, fixedLevel);
-                    // Clear template flag for stats so skills/perks are redistributed at named level
+                    // Clear Stats and SpellList template flags so skills/perks redistribute at named level
                     npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
+                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
                     wasChanged = true;
                     ++namedCount;
                 }
@@ -1748,8 +1750,9 @@ namespace SkyrimReleveler
                     if (Settings.PrintDebugOutput)
                         Console.WriteLine($"    -> final {newLevel} (offset={Settings.GlobalOffset}, raceMult={rMult}, raceAdd={rAdd}, bonus={bonusPct}%)");
                     ApplyLevel(npcCopy, newLevel);
-                    // Clear Stats template flag so skill/perk redistribution runs at the new level
+                    // Clear Stats and SpellList template flags so skills/perks redistribute at new level
                     npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
+                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
                     wasChanged = true;
                     ++pipelineCount;
                 }
