@@ -161,7 +161,27 @@
     "DraconicInfusion",
     "PoSOverflow",
     "PoSDecoy",
-    "Arise"
+    "Arise",
+
+    "MoltenBody",
+    "OrbWeaving",
+    "DreadCloak",
+    "TimeStop",
+    "SummonArmor",
+    "EtherealForm",
+    "SpellSponge",
+    "CelestialAttunement",
+    "CrystallineShell",
+    "RealityShatter",
+    "GlacierBorn",
+    "ManaShield",
+    "ArcaneNexus",
+    "ChronoField",
+    "PlaneshiftBarrier",
+    "PhaseShift",
+    "VoidWalker",
+    "AstralAegis",
+    "CosmicHorizon"
   ],
   "ForbiddenKeys": []
 }

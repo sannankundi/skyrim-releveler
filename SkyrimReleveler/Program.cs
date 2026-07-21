@@ -559,7 +559,9 @@ namespace SkyrimReleveler
                 for (int i = tempWeights.Count - 1; i >= 0; --i)
                 {
                     if (firstPass) skillValues[tempWeights[i].Key] = 15;
-                    skillValues[tempWeights[i].Key] += (byte)(skillPoints * (tempWeights[i].Value / weightSum));
+                    int addedPoints = (int)Math.Round(skillPoints * (tempWeights[i].Value / weightSum));
+                    int newVal = skillValues[tempWeights[i].Key] + addedPoints;
+                    skillValues[tempWeights[i].Key] = (byte)Math.Min(newVal, byte.MaxValue);
                     if (skillValues[tempWeights[i].Key] > maxSkill)
                     {
                         overflow += skillValues[tempWeights[i].Key] - maxSkill;
@@ -684,7 +686,7 @@ namespace SkyrimReleveler
             var nodes = new List<(INpcSpawnGetter, int)>();
             if (spawn is INpcGetter ng)
             {
-                if (ng.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Inventory)
+                if (ng.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.SpellList)
                     && ng.Template.TryResolve(lc, out var t)) nodes.Add((t, 1));
                 else foreach (var sp in ng.ActorEffect.EmptyIfNull())
                     if (sp.TryResolve(lc, out var sr))
@@ -702,7 +704,7 @@ namespace SkyrimReleveler
                         if (c.Data?.Reference.TryResolve(lc, out var cs) == true) nodes.Add((cs, l2.Entries!.Count));
                 else if (node is INpcGetter sg2)
                 {
-                    if (sg2.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Inventory)
+                    if (sg2.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.SpellList)
                         && sg2.Template.TryResolve(lc, out var t2)) nodes.Add((t2, 1));
                     else foreach (var sp in sg2.ActorEffect.EmptyIfNull())
                         if (sp.TryResolve(lc, out var sr))
@@ -730,7 +732,7 @@ namespace SkyrimReleveler
         private static void CalculateClassWeights(Class cls, IDictionary<Skill, float> w)
         {
             var list = w.Where(e => e.Value > 0).ToList();
-            list.Sort((x, y) => x.Value >= y.Value ? 1 : -1);
+            list.Sort((x, y) => x.Value.CompareTo(y.Value));
             float last = list[0].Value;
             for (int rank = 1, i = 0; i < list.Count; i++)
             {
@@ -866,7 +868,11 @@ namespace SkyrimReleveler
                         (cf.CompareOperator == CompareOperator.NotEqualTo && cf.ComparisonValue == 0 && !has))
                         return false;
                 }
-                else return false;
+                // Any other condition type (IsInCombat, GetIsRace, GetActorValue for a different
+                // skill, etc.) is beyond what we can evaluate for an NPC record at patch time.
+                // We skip it rather than rejecting the perk outright — a false positive (granting
+                // a perk whose runtime condition wouldn't fire) is far less harmful than a false
+                // negative (blocking an entire perk chain because one condition is unrecognized).
             }
             return true;
         }
@@ -884,7 +890,15 @@ namespace SkyrimReleveler
                 if (npc.HasKeyword(kw) || race.HasKeyword(kw)) return false;
 
             float perksTotal = Settings.NPCPerksPerLevel;
-            if (npc.Configuration.Level is NpcLevel nl) perksTotal *= nl.Level;
+            if (npc.Configuration.Level is NpcLevel nl)
+                perksTotal *= nl.Level;
+            else if (npc.Configuration.Level is PcLevelMult)
+            {
+                // Followers have no fixed level — use FollowerPerkLevel as the perk budget basis.
+                // If 0, skip perk distribution for this NPC entirely.
+                if (Settings.FollowerPerkLevel <= 0) return false;
+                perksTotal *= Settings.FollowerPerkLevel;
+            }
 
             npc.Perks ??= new();
             if (Settings.RemoveVanillaPerks) RemoveVanillaPerks(npc, vanillaCache);

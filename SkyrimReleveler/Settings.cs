@@ -49,6 +49,9 @@ namespace SkyrimReleveler
         [Tooltip("If enabled, followers (vanilla follower factions + custom list) scale 1:1 with the player with no level cap. They will never become weaker than the player. Followers are excluded from NPC releveling.")]
         public bool ScaleFollowers { get; set; } = true;
 
+        [Tooltip("The assumed level used to calculate how many perks followers receive. Since followers scale with the player instead of having a fixed level, this value is used as a stand-in for perk budget. Default is 100. Set to 0 to give followers no perks.")]
+        public int FollowerPerkLevel { get; set; } = 100;
+
         // -------------------------------------------------------------------------
         // NPC skill redistribution
         // -------------------------------------------------------------------------
