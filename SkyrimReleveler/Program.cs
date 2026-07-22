@@ -1122,15 +1122,19 @@ namespace SkyrimReleveler
             int followersScaled = 0, namedCount = 0, civiliansScaled = 0,
                 pipelineCount = 0, npcsProcessed = 0;
 
-            foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
+            foreach (var ctx in state.LoadOrder.PriorityOrder.Npc().WinningContextOverrides())
             {
+                var getter = ctx.Record;
                 if (NpcsToIgnore.Contains(getter)) continue;
                 if (getter.EditorID is not { } editorId) continue;
                 if (getter.Configuration.Flags.HasFlag(NpcConfiguration.Flag.IsCharGenFacePreset) ||
                     getter.HasKeyword(Skyrim.Keyword.PlayerKeyword)) continue;
                 if (IsExcluded(editorId)) continue;
 
-                Npc npcCopy = getter.DeepCopy();
+                // Use DeepCopy as a scratch object for all logic — nothing gets Set()
+                // from this copy directly. Only the specific fields we touch are
+                // transferred onto a proper context override at the end.
+                Npc scratch = getter.DeepCopy();
                 bool wasChanged = false;
 
                 if (Settings.EnableReleveling)
@@ -1138,9 +1142,9 @@ namespace SkyrimReleveler
                     // Priority 1: followers
                     if (IsFollower(getter))
                     {
-                        npcCopy.Configuration.Level = new PcLevelMult { LevelMult = 1f };
-                        npcCopy.Configuration.CalcMinLevel = Math.Max(npcCopy.Configuration.CalcMinLevel, (short)1);
-                        npcCopy.Configuration.CalcMaxLevel = short.MaxValue;
+                        scratch.Configuration.Level = new PcLevelMult { LevelMult = 1f };
+                        scratch.Configuration.CalcMinLevel = Math.Max(scratch.Configuration.CalcMinLevel, (short)1);
+                        scratch.Configuration.CalcMaxLevel = short.MaxValue;
                         wasChanged = true;
                         ++followersScaled;
                         if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: follower -> unlimited scaling");
@@ -1149,10 +1153,10 @@ namespace SkyrimReleveler
                     else if (FindNamedLevel(editorId) is { } namedLevel)
                     {
                         short fixedLevel = (short)Math.Clamp(namedLevel + Settings.GlobalOffset, 1, short.MaxValue);
-                        ApplyLevel(npcCopy, fixedLevel);
-                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
-                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
-                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
+                        ApplyLevel(scratch, fixedLevel);
+                        scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
+                        scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
+                        scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
                         wasChanged = true;
                         ++namedCount;
                         if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
@@ -1160,9 +1164,9 @@ namespace SkyrimReleveler
                     // Priority 3: civilians
                     else if (IsCivilian(getter, linkCache))
                     {
-                        npcCopy.Configuration.Level = new PcLevelMult { LevelMult = 1f };
-                        npcCopy.Configuration.CalcMinLevel = 1;
-                        npcCopy.Configuration.CalcMaxLevel = 50;
+                        scratch.Configuration.Level = new PcLevelMult { LevelMult = 1f };
+                        scratch.Configuration.CalcMinLevel = 1;
+                        scratch.Configuration.CalcMaxLevel = 50;
                         wasChanged = true;
                         ++civiliansScaled;
                         if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: civilian -> PC-scaled cap 50");
@@ -1171,21 +1175,49 @@ namespace SkyrimReleveler
                     else if (assessments.TryGetValue(getter.FormKey, out var assessment))
                     {
                         short newLevel = ComputeLevel(assessment, factionRanges, raceRanges, tierRanges, Settings);
-                        ApplyLevel(npcCopy, newLevel);
-                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
-                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
-                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
+                        ApplyLevel(scratch, newLevel);
+                        scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
+                        scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
+                        scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
                         wasChanged = true;
                         ++pipelineCount;
                     }
 
-                    wasChanged |= RebalanceClassValues(npcCopy, state, linkCache);
-                    wasChanged |= RelevelNPCSkills(npcCopy, linkCache);
-                    wasChanged |= DistributeNPCPerks(npcCopy, linkCache, GetVanillaCache(), excludedPerks);
+                    wasChanged |= RebalanceClassValues(scratch, state, linkCache);
+                    wasChanged |= RelevelNPCSkills(scratch, linkCache);
+                    wasChanged |= DistributeNPCPerks(scratch, linkCache, GetVanillaCache(), excludedPerks);
                 }
 
                 if (wasChanged)
-                    state.PatchMod.Npcs.Set(npcCopy);
+                {
+                    // Get a minimal override — only the fields we actually changed
+                    // are written. Everything else (body data, AI, combat style,
+                    // factions, model paths, etc.) is left untouched.
+                    var npcOverride = ctx.GetOrAddAsOverride(state.PatchMod);
+
+                    // Level / configuration block
+                    npcOverride.Configuration.Level        = scratch.Configuration.Level;
+                    npcOverride.Configuration.CalcMinLevel = scratch.Configuration.CalcMinLevel;
+                    npcOverride.Configuration.CalcMaxLevel = scratch.Configuration.CalcMaxLevel;
+                    npcOverride.Configuration.TemplateFlags = scratch.Configuration.TemplateFlags;
+
+                    // Class (only changed by RebalanceClassValues for humanoids)
+                    if (!scratch.Class.Equals(getter.Class))
+                        npcOverride.Class = scratch.Class;
+
+                    // Skills
+                    if (scratch.PlayerSkills is not null)
+                    {
+                        npcOverride.PlayerSkills ??= new PlayerSkills();
+                        foreach (var (skill, val) in scratch.PlayerSkills.SkillValues)
+                            npcOverride.PlayerSkills.SkillValues[skill] = val;
+                    }
+
+                    // Perks
+                    npcOverride.Perks = scratch.Perks is { Count: > 0 }
+                        ? scratch.Perks
+                        : null;
+                }
 
                 ++npcsProcessed;
                 if (npcsProcessed % 2000 == 0)
