@@ -413,6 +413,11 @@ namespace SkyrimReleveler
             npc.Configuration.HealthOffset  = (short)Math.Round(totalPoints * (hW / total));
             npc.Configuration.MagickaOffset = (short)Math.Round(totalPoints * (mW / total));
             npc.Configuration.StaminaOffset = (short)Math.Round(totalPoints * (sW / total));
+
+            // Auto-calc stats overrides the offsets at runtime — clear it so our
+            // computed values are actually used by the engine.
+            npc.Configuration.Flags &= ~NpcConfiguration.Flag.AutoCalcStats;
+
             return true;
         }
 
@@ -478,6 +483,10 @@ namespace SkyrimReleveler
                 return false;
             if (npc.Configuration.Level is not NpcLevel npcLevel) return false;
             if (!npc.Class.TryResolve(linkCache, out var classGetter)) return false;
+            // Only redistribute skills for humanoids — writing DNAM skill values to
+            // creatures breaks their AI detection (Skyrim reads those for perception).
+            if (!npc.Race.TryResolve(linkCache, out var race)) return false;
+            if (!race.HasKeyword(Skyrim.Keyword.ActorTypeNPC) && !race.HasKeyword(Skyrim.Keyword.ActorTypeUndead)) return false;
 
             if (npc.PlayerSkills is null)
                 npc.PlayerSkills = new PlayerSkills();
@@ -1224,6 +1233,7 @@ namespace SkyrimReleveler
                     npcOverride.Configuration.CalcMinLevel = scratch.Configuration.CalcMinLevel;
                     npcOverride.Configuration.CalcMaxLevel = scratch.Configuration.CalcMaxLevel;
                     npcOverride.Configuration.TemplateFlags = scratch.Configuration.TemplateFlags;
+                    npcOverride.Configuration.Flags         = scratch.Configuration.Flags;
                     npcOverride.Configuration.HealthOffset  = scratch.Configuration.HealthOffset;
                     npcOverride.Configuration.MagickaOffset = scratch.Configuration.MagickaOffset;
                     npcOverride.Configuration.StaminaOffset = scratch.Configuration.StaminaOffset;
