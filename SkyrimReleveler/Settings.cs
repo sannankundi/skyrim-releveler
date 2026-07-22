@@ -22,6 +22,9 @@ namespace SkyrimReleveler
 
     public class Settings
     {
+        [Tooltip("Master switch for the NPC releveling system. When disabled, NPC levels are left completely untouched. All other leveling settings are ignored. Default is true.")]
+        public bool EnableReleveling { get; set; } = true;
+
         [Tooltip("A flat level value added or subtracted from every NPC's final computed level. Useful for making the whole world harder or easier. Default is 0.")]
         public int GlobalOffset { get; set; } = 0;
 

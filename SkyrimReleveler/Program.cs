@@ -995,6 +995,9 @@ namespace SkyrimReleveler
             // Pre-pass: build faction member counts, then assessments + peer ranges
             // -----------------------------------------------------------------------
 
+            if (!Settings.EnableReleveling)
+                Console.WriteLine("  Releveling is DISABLED — NPC levels will not be modified.");
+
             // Pass A — faction membership counts
             var factionMemberCount = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var getter in state.LoadOrder.PriorityOrder.Npc().WinningOverrides())
@@ -1112,53 +1115,56 @@ namespace SkyrimReleveler
                 Npc npcCopy = getter.DeepCopy();
                 bool wasChanged = false;
 
-                // Priority 1: followers
-                if (IsFollower(getter))
+                if (Settings.EnableReleveling)
                 {
-                    npcCopy.Configuration.Level = new PcLevelMult { LevelMult = 1f };
-                    npcCopy.Configuration.CalcMinLevel = Math.Max(npcCopy.Configuration.CalcMinLevel, (short)1);
-                    npcCopy.Configuration.CalcMaxLevel = short.MaxValue;
-                    wasChanged = true;
-                    ++followersScaled;
-                    if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: follower -> unlimited scaling");
-                }
-                // Priority 2: named overrides
-                else if (FindNamedLevel(editorId) is { } namedLevel)
-                {
-                    short fixedLevel = (short)Math.Clamp(namedLevel + Settings.GlobalOffset, 1, short.MaxValue);
-                    ApplyLevel(npcCopy, fixedLevel);
-                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
-                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
-                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
-                    wasChanged = true;
-                    ++namedCount;
-                    if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
-                }
-                // Priority 3: civilians
-                else if (IsCivilian(getter, linkCache))
-                {
-                    npcCopy.Configuration.Level = new PcLevelMult { LevelMult = 1f };
-                    npcCopy.Configuration.CalcMinLevel = 1;
-                    npcCopy.Configuration.CalcMaxLevel = 50;
-                    wasChanged = true;
-                    ++civiliansScaled;
-                    if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: civilian -> PC-scaled cap 50");
-                }
-                // Priority 4: pipeline
-                else if (assessments.TryGetValue(getter.FormKey, out var assessment))
-                {
-                    short newLevel = ComputeLevel(assessment, factionRanges, raceRanges, tierRanges, Settings);
-                    ApplyLevel(npcCopy, newLevel);
-                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
-                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
-                    npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
-                    wasChanged = true;
-                    ++pipelineCount;
-                }
+                    // Priority 1: followers
+                    if (IsFollower(getter))
+                    {
+                        npcCopy.Configuration.Level = new PcLevelMult { LevelMult = 1f };
+                        npcCopy.Configuration.CalcMinLevel = Math.Max(npcCopy.Configuration.CalcMinLevel, (short)1);
+                        npcCopy.Configuration.CalcMaxLevel = short.MaxValue;
+                        wasChanged = true;
+                        ++followersScaled;
+                        if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: follower -> unlimited scaling");
+                    }
+                    // Priority 2: named overrides
+                    else if (FindNamedLevel(editorId) is { } namedLevel)
+                    {
+                        short fixedLevel = (short)Math.Clamp(namedLevel + Settings.GlobalOffset, 1, short.MaxValue);
+                        ApplyLevel(npcCopy, fixedLevel);
+                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
+                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
+                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
+                        wasChanged = true;
+                        ++namedCount;
+                        if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
+                    }
+                    // Priority 3: civilians
+                    else if (IsCivilian(getter, linkCache))
+                    {
+                        npcCopy.Configuration.Level = new PcLevelMult { LevelMult = 1f };
+                        npcCopy.Configuration.CalcMinLevel = 1;
+                        npcCopy.Configuration.CalcMaxLevel = 50;
+                        wasChanged = true;
+                        ++civiliansScaled;
+                        if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: civilian -> PC-scaled cap 50");
+                    }
+                    // Priority 4: pipeline
+                    else if (assessments.TryGetValue(getter.FormKey, out var assessment))
+                    {
+                        short newLevel = ComputeLevel(assessment, factionRanges, raceRanges, tierRanges, Settings);
+                        ApplyLevel(npcCopy, newLevel);
+                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
+                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
+                        npcCopy.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
+                        wasChanged = true;
+                        ++pipelineCount;
+                    }
 
-                wasChanged |= RebalanceClassValues(npcCopy, state, linkCache);
-                wasChanged |= RelevelNPCSkills(npcCopy, linkCache);
-                wasChanged |= DistributeNPCPerks(npcCopy, linkCache, GetVanillaCache(), excludedPerks);
+                    wasChanged |= RebalanceClassValues(npcCopy, state, linkCache);
+                    wasChanged |= RelevelNPCSkills(npcCopy, linkCache);
+                    wasChanged |= DistributeNPCPerks(npcCopy, linkCache, GetVanillaCache(), excludedPerks);
+                }
 
                 if (wasChanged)
                     state.PatchMod.Npcs.Set(npcCopy);
