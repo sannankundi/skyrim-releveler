@@ -647,6 +647,7 @@ namespace SkyrimReleveler
         {
             if (!Settings.RebuildNPCClasses) return false;
             if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Stats) && !npc.Template.IsNull) return false;
+            if (!npc.Race.TryResolve<IRaceGetter>(lc, out var race)) return false;
             if (!npc.Class.TryResolve(lc, out var cls)) return false;
             if (npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique)
                 && ExcludedClasses.Any(e => (cls.EditorID?.Contains(e, StringComparison.OrdinalIgnoreCase) ?? false)
@@ -661,19 +662,36 @@ namespace SkyrimReleveler
             w.ForEach(x => w[x.Key] = (float)Math.Ceiling(x.Value));
             if (w.All(x => x.Value == 0)) return false;
 
-            var newClass = state.PatchMod.Classes.AddNew();
-            newClass.EditorID = "SRClass" + npc.EditorID;
-            // Copy the fields CalculateClassWeights and perk distribution need
-            if (cls.Name is not null) newClass.Name = cls.Name.DeepCopy();
-            newClass.StatWeights[BasicStat.Health]  = cls.StatWeights[BasicStat.Health];
-            newClass.StatWeights[BasicStat.Magicka] = cls.StatWeights[BasicStat.Magicka];
-            newClass.StatWeights[BasicStat.Stamina] = cls.StatWeights[BasicStat.Stamina];
-            foreach (var sw in cls.SkillWeights)
-                newClass.SkillWeights[sw.Key] = sw.Value;
-            npc.Class = newClass.ToLink();
-            CalculateClassWeights(newClass, w);
-            newClass.SkillWeights.ForEach(x => newClass.SkillWeights[x.Key] = 0);
-            w.ForEach(x => newClass.SkillWeights[x.Key] = (byte)x.Value);
+            bool isHumanoid = race.HasKeyword(Skyrim.Keyword.ActorTypeNPC)
+                           || race.HasKeyword(Skyrim.Keyword.ActorTypeUndead);
+
+            if (isHumanoid)
+            {
+                // Humanoids: create a fresh per-NPC class record so we don't pollute
+                // a shared class that other NPCs reference.
+                var newClass = state.PatchMod.Classes.AddNew();
+                newClass.EditorID = "SRClass" + npc.EditorID;
+                if (cls.Name is not null) newClass.Name = cls.Name.DeepCopy();
+                newClass.StatWeights[BasicStat.Health]  = cls.StatWeights[BasicStat.Health];
+                newClass.StatWeights[BasicStat.Magicka] = cls.StatWeights[BasicStat.Magicka];
+                newClass.StatWeights[BasicStat.Stamina] = cls.StatWeights[BasicStat.Stamina];
+                foreach (var sw in cls.SkillWeights)
+                    newClass.SkillWeights[sw.Key] = sw.Value;
+                npc.Class = newClass.ToLink();
+                CalculateClassWeights(newClass, w);
+                newClass.SkillWeights.ForEach(x => newClass.SkillWeights[x.Key] = 0);
+                w.ForEach(x => newClass.SkillWeights[x.Key] = (byte)x.Value);
+            }
+            else
+            {
+                // Creatures: patch the existing class record in-place so the NPC's
+                // class reference never changes (avoids invisible/unselectable actors).
+                var classOverride = state.PatchMod.Classes.GetOrAddAsOverride(cls);
+                CalculateClassWeights(classOverride, w);
+                classOverride.SkillWeights.ForEach(x => classOverride.SkillWeights[x.Key] = 0);
+                w.ForEach(x => classOverride.SkillWeights[x.Key] = (byte)x.Value);
+            }
+
             return true;
         }
 
