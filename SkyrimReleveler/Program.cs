@@ -396,8 +396,6 @@ namespace SkyrimReleveler
         public static bool RelevelNPCStats(Npc npc, ILinkCache linkCache)
         {
             if (Settings.NPCStatsPerLevel <= 0) return false;
-            if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Stats) && !npc.Template.IsNull)
-                return false;
             if (npc.Configuration.Level is not NpcLevel npcLevel) return false;
             if (!npc.Class.TryResolve(linkCache, out var cls)) return false;
 
@@ -1233,10 +1231,13 @@ namespace SkyrimReleveler
                     npcOverride.Configuration.CalcMinLevel = scratch.Configuration.CalcMinLevel;
                     npcOverride.Configuration.CalcMaxLevel = scratch.Configuration.CalcMaxLevel;
                     npcOverride.Configuration.TemplateFlags = scratch.Configuration.TemplateFlags;
-                    npcOverride.Configuration.Flags         = scratch.Configuration.Flags;
                     npcOverride.Configuration.HealthOffset  = scratch.Configuration.HealthOffset;
                     npcOverride.Configuration.MagickaOffset = scratch.Configuration.MagickaOffset;
                     npcOverride.Configuration.StaminaOffset = scratch.Configuration.StaminaOffset;
+                    // Only clear AutoCalcStats if RelevelNPCStats ran (i.e. scratch cleared it
+                    // but the original had it set) — touch nothing else in Flags.
+                    if (!scratch.Configuration.Flags.HasFlag(NpcConfiguration.Flag.AutoCalcStats))
+                        npcOverride.Configuration.Flags &= ~NpcConfiguration.Flag.AutoCalcStats;
 
                     // Class (only changed by RebalanceClassValues for humanoids)
                     if (!scratch.Class.Equals(getter.Class))
