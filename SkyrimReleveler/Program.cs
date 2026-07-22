@@ -389,6 +389,33 @@ namespace SkyrimReleveler
             npc.Configuration.CalcMaxLevel = newLevel;
         }
 
+        // Distribute Health/Magicka/Stamina offsets from scratch using NPCStatsPerLevel * level,
+        // proportioned by the class StatWeights — same pattern as RelevelNPCSkills for skills.
+        // Overwrites whatever the original author put in, giving every NPC a clean stat budget
+        // derived purely from their new level and class.
+        public static bool RelevelNPCStats(Npc npc, ILinkCache linkCache)
+        {
+            if (Settings.NPCStatsPerLevel <= 0) return false;
+            if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Stats) && !npc.Template.IsNull)
+                return false;
+            if (npc.Configuration.Level is not NpcLevel npcLevel) return false;
+            if (!npc.Class.TryResolve(linkCache, out var cls)) return false;
+
+            int totalPoints = (int)Math.Round(Settings.NPCStatsPerLevel * npcLevel.Level);
+            float hW = cls.StatWeights[BasicStat.Health];
+            float mW = cls.StatWeights[BasicStat.Magicka];
+            float sW = cls.StatWeights[BasicStat.Stamina];
+            float total = hW + mW + sW;
+
+            // If all weights are zero fall back to equal distribution
+            if (total <= 0) { hW = 1; mW = 1; sW = 1; total = 3; }
+
+            npc.Configuration.HealthOffset  = (short)Math.Round(totalPoints * (hW / total));
+            npc.Configuration.MagickaOffset = (short)Math.Round(totalPoints * (mW / total));
+            npc.Configuration.StaminaOffset = (short)Math.Round(totalPoints * (sW / total));
+            return true;
+        }
+
         // -------------------------------------------------------------------------
         // Civilian detection — unchanged
         // -------------------------------------------------------------------------
@@ -1155,8 +1182,6 @@ namespace SkyrimReleveler
                         short fixedLevel = (short)Math.Clamp(namedLevel + Settings.GlobalOffset, 1, short.MaxValue);
                         ApplyLevel(scratch, fixedLevel);
                         scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
-                        scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
-                        scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
                         wasChanged = true;
                         ++namedCount;
                         if (Settings.PrintDebugOutput) Console.WriteLine($"  {editorId}: named -> {fixedLevel}");
@@ -1177,14 +1202,13 @@ namespace SkyrimReleveler
                         short newLevel = ComputeLevel(assessment, factionRanges, raceRanges, tierRanges, Settings);
                         ApplyLevel(scratch, newLevel);
                         scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Stats;
-                        scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.SpellList;
-                        scratch.Configuration.TemplateFlags &= ~NpcConfiguration.TemplateFlag.Traits;
                         wasChanged = true;
                         ++pipelineCount;
                     }
 
                     wasChanged |= RebalanceClassValues(scratch, state, linkCache);
                     wasChanged |= RelevelNPCSkills(scratch, linkCache);
+                    wasChanged |= RelevelNPCStats(scratch, linkCache);
                     wasChanged |= DistributeNPCPerks(scratch, linkCache, GetVanillaCache(), excludedPerks);
                 }
 
@@ -1200,6 +1224,9 @@ namespace SkyrimReleveler
                     npcOverride.Configuration.CalcMinLevel = scratch.Configuration.CalcMinLevel;
                     npcOverride.Configuration.CalcMaxLevel = scratch.Configuration.CalcMaxLevel;
                     npcOverride.Configuration.TemplateFlags = scratch.Configuration.TemplateFlags;
+                    npcOverride.Configuration.HealthOffset  = scratch.Configuration.HealthOffset;
+                    npcOverride.Configuration.MagickaOffset = scratch.Configuration.MagickaOffset;
+                    npcOverride.Configuration.StaminaOffset = scratch.Configuration.StaminaOffset;
 
                     // Class (only changed by RebalanceClassValues for humanoids)
                     if (!scratch.Class.Equals(getter.Class))

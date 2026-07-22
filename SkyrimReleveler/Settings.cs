@@ -44,7 +44,7 @@ namespace SkyrimReleveler
         public bool ScaleFollowers { get; set; } = true;
 
         [Tooltip("The assumed level used to calculate how many perks followers receive. Default is 500. Set to 0 to give followers no perks.")]
-        public int FollowerPerkLevel { get; set; } = 500;
+        public int FollowerPerkLevel { get; set; } = 750;
 
         // -------------------------------------------------------------------------
         // NPC skill redistribution
@@ -65,7 +65,7 @@ namespace SkyrimReleveler
         // NPC perk distribution
         // -------------------------------------------------------------------------
         [Tooltip("Perk points given per NPC level, spent in their skill trees respecting skill requirements and prerequisites. Set to 0 to disable perk distribution entirely.")]
-        public float NPCPerksPerLevel { get; set; } = 0.3f;
+        public float NPCPerksPerLevel { get; set; } = 0.5f;
 
         [Tooltip("If enabled, vanilla perks are stripped from NPCs before new ones are distributed.")]
         public bool RemoveVanillaPerks { get; set; } = true;
@@ -91,6 +91,13 @@ namespace SkyrimReleveler
             "boss", "chief", "master", "lord", "king", "queen",
             "elder", "ancient", "arch", "high", "warlord", "deathlord",
         };
+
+        // -------------------------------------------------------------------------
+        // NPC stat redistribution
+        // -------------------------------------------------------------------------
+        [Tooltip("Stat points (Health/Magicka/Stamina) given to each NPC per level, distributed according to their class stat weights. " +
+                 "Set to 0 to leave NPC stat offsets at their original authored values. Default is 5.")]
+        public float NPCStatsPerLevel { get; set; } = 10.0f;
 
         // -------------------------------------------------------------------------
         // Weapon / armor stat multipliers
